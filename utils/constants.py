@@ -23,7 +23,7 @@ EXTENSIONS = {
 AGGREGATOR_TYPE = {
     "FedEM": "centralized",
     "FedAvg": "centralized",
-    "AGFL":"agfl",
+    "AGFL":"AGFL",
     "FedProx": "centralized",
     "local": "no_communication",
     "pFedMe": "personalized",
