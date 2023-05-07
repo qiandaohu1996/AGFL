@@ -12,8 +12,12 @@ from sklearn.metrics import pairwise_distances
 from sklearn.cluster import AgglomerativeClustering
 
 from utils.torch_utils import *
+# from utils.utils import *
 from finch import FINCH
+from torch.cuda.amp import autocast as autocast
 
+from learners.learner import *
+from learners.learners_ensemble import *
 
 class Aggregator(ABC):
     r""" Base class for Aggregator. `Aggregator` dictates communications between clients
@@ -330,105 +334,8 @@ class PersonalizedAggregator(CentralizedAggregator):
             for learner_id, learner in enumerate(client.learners_ensemble):
                 if callable(getattr(learner.optimizer, "set_initial_params", None)):
                     learner.optimizer.set_initial_params(self.global_learners_ensemble[learner_id].model.parameters())
-
-
+ 
 class APFLAggregator(Aggregator):
-    """
-    Implements APFL introduced in
-    Adaptive Personalized Federated Learning ([Deng et al. 2020](https://arxiv.org/abs/2003.13461))
-    """
-    def __init__(
-            self,
-            clients,
-            global_learners_ensemble,
-            log_freq,
-            global_train_logger,
-            global_test_logger,
-            alpha_learning_rate=0.03,
-            alpha=0.2,
-            sampling_rate=1.,
-            sample_with_replacement=False,
-            test_clients=None,
-            verbose=0,
-            seed=None
-    ):
-        super(APFLAggregator, self).__init__(
-            clients=clients,
-            global_learners_ensemble=global_learners_ensemble,
-            log_freq=log_freq,
-            global_train_logger=global_train_logger,
-            global_test_logger=global_test_logger,
-            sampling_rate=sampling_rate,
-            sample_with_replacement=sample_with_replacement,
-            test_clients=test_clients,
-            verbose=verbose,
-            seed=seed
-        )
-
-        self.alpha = alpha
-        self.alpha_learning_rate=alpha_learning_rate
-
-    def mix(self):
-        print("Max memory allocated:", torch.cuda.max_memory_allocated(device=0))
-        print("Current memory allocated:", torch.cuda.memory_allocated(device=0))
-
-        self.sample_clients()
-
-        for learner_id in range(self.n_learners):
-            # Initialize global model at each round of training
-            global_model = deepcopy(self.global_learners_ensemble[learner_id].model)
-
-            for client in self.sampled_clients:
-                for _ in range(client.local_steps):
-                    client.step(single_batch_flag=True)
-
-                    partial_average(
-                        learners=[client.learners_ensemble[learner_id+1]],
-                        average_learner=client.learners_ensemble[learner_id],
-                        alpha=self.alpha
-                    )
-
-            # Average local models and update global model
-            average_learners(
-                learners=[client.learners_ensemble[learner_id] for client in self.clients],
-                target_learner=self.global_learners_ensemble[learner_id],
-                weights=self.clients_weights
-            )
-
-            # Update personalized models for each client using the new global model
-            for client in self.clients:
-                copy_model(self.global_learners_ensemble[learner_id].model, client.learners_ensemble[learner_id+1].model)
-                alpha_weight = self.alpha
-                beta_weight = 1 - alpha_weight
-
-                # Update personalized model using weighted average of local and global models
-                for key in global_model.state_dict():
-                    if global_model.state_dict()[key].data.dtype == torch.float32:
-                        global_param = global_model.state_dict()[key].data
-                        local_param = client.learners_ensemble[learner_id].model.state_dict()[key].data
-                        client.learners_ensemble[learner_id+1].model.state_dict()[key].data = \
-                            alpha_weight * local_param + beta_weight * global_param
-
-                if callable(getattr(client.learners_ensemble[learner_id+1].optimizer, "set_initial_params", None)):
-                    client.learners_ensemble[learner_id+1].optimizer.set_initial_params(
-                        self.global_learners_ensemble[learner_id].model.parameters()
-                    )
-
-        self.c_round += 1
-
-        if self.c_round % self.log_freq == 0:
-            self.write_logs()
-
-    def update_clients(self):
-        for client in self.clients:
-
-            copy_model(client.learners_ensemble[0].model, self.global_learners_ensemble[0].model)
-
-            if callable(getattr(client.learners_ensemble[0].optimizer, "set_initial_params", None)):
-                client.learners_ensemble[0].optimizer.set_initial_params(
-                    self.global_learners_ensemble[0].model.parameters()
-                )
-class APFLAggregator2(Aggregator):
     r"""
     Implements
         `Adaptive Personalized Federated Learning`__(https://arxiv.org/abs/2003.13461)
@@ -441,7 +348,7 @@ class APFLAggregator2(Aggregator):
             log_freq,
             global_train_logger,
             global_test_logger,
-            alpha,
+            alpha=0.2,
             sampling_rate=1.,
             sample_with_replacement=False,
             test_clients=None,
@@ -619,9 +526,10 @@ class ClusteredAggregator(Aggregator):
         self.tol_1 = tol_1
         self.tol_2 = tol_2
 
-        self.global_learners = [self.global_learners_ensemble]
+        self.global_learners = LearnersEnsemble
         self.clusters_indices = [np.arange(len(clients)).astype("int")]
         self.n_clusters = 1
+        self.global_learners=None
 
     def mix(self):
         clients_updates = np.zeros((self.n_clients, self.n_learners, self.model_dim))
@@ -665,6 +573,7 @@ class ClusteredAggregator(Aggregator):
 
         for cluster_id, indices in enumerate(self.clusters_indices):
             cluster_clients = [self.clients[i] for i in indices]
+            print(cluster_clients)
             for learner_id in range(self.n_learners):
                 average_learners(
                     learners=[client.learners_ensemble[learner_id] for client in cluster_clients],
@@ -707,9 +616,10 @@ class GroupAPFL(Aggregator):
             sampling_rate=1.,
             sample_with_replacement=False,
             test_clients=None,
+            alpha=0.2,
             verbose=0,
             seed=None,
-            pre_round=0
+            pre_rounds=1
     ):
 
         super(GroupAPFL, self).__init__(
@@ -725,106 +635,161 @@ class GroupAPFL(Aggregator):
             seed=seed
         )
 
-        assert self.n_learners == 1, "GroupAPFL only supports single learner clients."
+        assert self.n_learners == 2, "GroupAPFL only supports single learner clients."
         assert self.sampling_rate == 1.0, f"`sampling_rate` is {sampling_rate}, should be {1.0}," \
                                           f" GroupAPFL only supports full clients participation."
 
-  
-
-        self.global_learners = [self.global_learners_ensemble]
+ 
         self.clusters_indices = [np.arange(len(clients)).astype("int")]
         self.n_clusters = 1
-
-        self.pre_round = pre_round
-
-    def mix(self, pre_round=0):
+        self.pre_rounds=pre_rounds
+        self.alpha=alpha
+        self.alpha_list = [
+            torch.tensor(self.alpha, device=self.device) for _ in range(self.n_clients)
+        ]
+    def mix(self):
         """
         Pre-train the model for the specified number of pre_rounds, perform clustering, and then perform federated learning.
         """
         clients_updates = np.zeros((self.n_clients, self.n_learners, self.model_dim))
 
         # Pre-training
-        if self.c_round < self.pre_round:
-            print(f"Start pretrain {self.c_round} round")
-
-            clients_updates = np.zeros((self.n_clients, self.n_learners, self.model_dim))
+        if self.c_round < self.pre_rounds:
+            print(f"=========Start pretrain at {self.c_round} round===========")
 
             for client_id, client in enumerate(self.clients):
                 clients_updates[client_id] = client.step()
 
-            for learner_id in range(self.n_learners):
-                average_learners(
-                    learners=[client.learners_ensemble[learner_id] for client in self.clients],
-                    target_learner=self.global_learners_ensemble[learner_id],
-                    weights=self.clients_weights / self.clients_weights.sum()
-                )
+            
+            learners = [client.learners_ensemble[0] for client in self.clients]
+            average_learners(learners, self.global_learners_ensemble[0], weights=self.clients_weights)
+             
 
             self.pre_update_clients()
 
-            self.c_round += 1
-
-            if self.c_round % self.log_freq == 0:
-                self.write_logs()
         # Perform clustering
         elif self.n_clusters==1:
+            print(f"=============Start cluster================")
 
-            similarities = np.zeros((self.n_learners, self.n_clients, self.n_clients))
+            # similarities = np.zeros((self.n_learners, self.n_clients, self.n_clients))
 
-            for learner_id in range(self.n_learners):
-                similarities[learner_id] = pairwise_distances(clients_updates[:, learner_id, :], metric="cosine")
+            # for learner_id in range(self.n_learners):
+            #     similarities[learner_id] = pairwise_distances(clients_updates[:, learner_id, :], metric="cosine")
 
-            similarities = similarities.mean(axis=0)
+            # similarities = similarities.mean(axis=0)
+            similarities = np.zeros((self.n_clients, self.n_clients), dtype='float32')
+
+            similarities = pairwise_distances(clients_updates[:, 0, :], metric="cosine")
+            # similarities = similarities_learner_0.mean(axis=0)
 
             # Directly use AgglomerativeClustering to divide clients into 5 clusters
             clustering = AgglomerativeClustering(n_clusters=5, metric="precomputed", linkage="complete")
             clustering.fit(similarities)
-
-            # Assign clients to their respective clusters
-            new_cluster_indices = [np.argwhere(clustering.labels_ == i).flatten() for i in range(5)]
-
-            self.clusters_indices = new_cluster_indices
+         
+            self.clusters_indices = [np.argwhere(clustering.labels_ == i).flatten() for i in range(5)]
+            print("\n分组情况：")
+            print(self.clusters_indices)
             self.n_clusters = len(self.clusters_indices)
-
-            self.global_learners = [deepcopy(self.clients[0].learners_ensemble) for _ in range(self.n_clusters)]
+            # self.clients[0].learners_ensemble[1]= deepcopy(self.clients[0].learners_ensemble[0])
+            learners = [deepcopy(self.clients[0].learners_ensemble[0]) for _ in range(self.n_clusters+1)]
+            self.global_learners=LearnersEnsemble(learners=learners, learners_weights=torch.ones(self.n_clusters+1) / (self.n_clusters+1))
         # Perform fedavg
-        for cluster_id, indices in enumerate(self.clusters_indices):
-            cluster_clients = [self.clients[i] for i in indices]
-            for learner_id in range(self.n_learners):
-                average_learners(
-                    learners=[client.learners_ensemble[learner_id] for client in cluster_clients],
-                    target_learner=self.global_learners[cluster_id][learner_id],
-                    weights=self.clients_weights[indices] / self.clients_weights[indices].sum()
+      
+        else:
+            '''
+            client.learners_ensemble[0] 本地-组模型
+            client.learners_ensemble[1] 全局模型
+            '''
+            cluster_weights= torch.zeros(self.n_clusters)
+            for client in self.clients:
+                client.step(single_batch_flag=True)
+                partial_average(
+                    learners=[client.learners_ensemble[0]],
+                    average_learner=client.learners_ensemble[1],
+                    alpha=self.alpha
                 )
-
-        self.update_clients()
+            for cluster_id, indices in enumerate(self.clusters_indices):
+                cluster_clients = [self.clients[i] for i in indices]
+                cluster_weights[cluster_id] =self.clients_weights[indices].sum()
+                for learner_id in range(self.n_learners):
+                    average_learners(
+                        learners=[client.learners_ensemble[learner_id] for client in cluster_clients],
+                        target_learner=self.global_learners[cluster_id],
+                        weights=self.clients_weights[indices] / self.clients_weights[indices].sum()
+                    )
+                # weights_sum = [self.clients_weights[indices] cluster_clients].sum()
+                # weights = [w / weights_sum for w in weights]
+                # self.clients_weights[indices] = weights
+            print("\n客户端权重：")
+            print(cluster_weights)
+            average_learners(
+                    learners=self.global_learners[:self.n_clusters],
+                    target_learner=self.global_learners[self.n_clusters],
+                    weights=cluster_weights
+                )
+                
+            self.update_clients()
 
         self.c_round += 1
 
         if self.c_round % self.log_freq == 0:
             self.write_logs()
+    # refers to https://github.com/MLOPTPSU/FedTorch/blob/b58da7408d783fd426872b63fbe0c0352c7fa8e4/fedtorch/comms/utils/flow_utils.py#L240
+    # def update_alpha(self):
+    #     alpha_grad = 0
+    #     for local_param, global_param in zip(
+    #         trainable_params(self.local_model), trainable_params(self.model)
+    #     ):
+    #         diff = (local_param.data - global_param.data).flatten()
+    #         grad = (
+    #             self.alpha * local_param.grad.data
+    #             + (1 - self.alpha) * global_param.grad.data
+    #         ).flatten()
+    #         alpha_grad += diff @ grad
+
+    #     alpha_grad += 0.02 * self.alpha
+    #     self.alpha.data -= self.local_lr * alpha_grad
+    #     self.alpha.clip_(0, 1.0)
+
 
     def update_clients(self):
         for cluster_id, indices in enumerate(self.clusters_indices):
-            cluster_learners = self.global_learners[cluster_id]
-
             for i in indices:
-                for learner_id, learner in enumerate(self.clients[i].learners_ensemble):
-                    copy_model(
-                        target=learner.model,
-                        source=cluster_learners[learner_id].model
-                    )
+                learners=self.clients[i].learners_ensemble 
+                copy_model(learners[0].model, self.global_learners[cluster_id].model)
+                copy_model(learners[1].model, self.global_learners[self.n_clusters].model)
+         
     def pre_update_clients(self):
         for client in self.clients:
-            for learner_id, learner in enumerate(client.learners_ensemble):
-                copy_model(learner.model, self.global_learners_ensemble[learner_id].model)
+            copy_model(client.learners_ensemble[0].model, self.global_learners_ensemble[0].model)
 
-                if callable(getattr(learner.optimizer, "set_initial_params", None)):
-                    learner.optimizer.set_initial_params(
-                        self.global_learners_ensemble[learner_id].model.parameters()
-                    )
+            if callable(getattr(client.learners_ensemble[0].optimizer, "set_initial_params", None)):
+                client.learners_ensemble[0].optimizer.set_initial_params(
+                    self.global_learners_ensemble[0].model.parameters()
+                )
+
     def update_test_clients(self):
-        pass
+        for client in self.test_clients:
+            copy_model(target=client.learners_ensemble[0].model, source=self.global_learners_ensemble[0].model)
 
+        # for client in self.test_clients:
+        #     client.update_sample_weights()
+        #     client.update_learners_weights(learner_id=0)
+    # def update_alpha(self):
+    #             alpha_grad = 0
+    #             for local_param, global_param in zip(
+    #                 trainable_params(self.local_model), trainable_params(self.model)
+    #             ):
+    #                 diff = (local_param.data - global_param.data).flatten()
+    #                 grad = (
+    #                     self.alpha * local_param.grad.data
+    #                     + (1 - self.alpha) * global_param.grad.data
+    #                 ).flatten()
+    #                 alpha_grad += diff @ grad
+
+    #             alpha_grad += 0.02 * self.alpha
+    #             self.alpha.data -= self.local_lr * alpha_grad
+    #             self.alpha.clip_(0, 1.0)
 
 class AgnosticAggregator(CentralizedAggregator):
     """

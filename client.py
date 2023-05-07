@@ -152,7 +152,33 @@ class Client(object):
             copy_model(source=self.learners_ensemble[learner_id].model, target=learner.model)
             learner.fit_epochs(self.train_iterator, self.local_steps, weights=self.samples_weights[learner_id])
  
+ 
+
 class AGFLClient(Client):
+    def __init__(
+            self,
+            learners_ensemble,
+            train_iterator,
+            val_iterator,
+            test_iterator,
+            logger,
+            local_steps,
+            tune_locally=False,
+            svrg_interval=5
+    ):
+        super().__init__(
+            learners_ensemble,
+            train_iterator,
+            val_iterator,
+            test_iterator,
+            logger,
+            local_steps,
+            tune_locally
+        )
+
+
+
+class AGFLSVRGClient(Client):
     def __init__(
             self,
             learners_ensemble,
