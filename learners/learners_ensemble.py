@@ -39,6 +39,13 @@ class LearnersEnsemble(object):
         self.device = self.learners[0].device
         self.metric = self.learners[0].metric
 
+        def __setitem__(self, index, value):
+            if isinstance(value, learners):  # 假设Learner是可接受的类类型
+                self._learners[index] = value
+            else:
+                raise TypeError("Expected a Learner object.")
+ 
+
     def optimizer_step(self):
         """
         perform one optimizer step, requires the gradients to be already computed

@@ -139,7 +139,10 @@ class Learner:
 
         if weights is not None:
             weights = weights.to(self.device)
-            loss = (loss_vec.T @ weights[indices]) / loss_vec.size(0)
+
+            # 或者使用 x.permute 反转张量的维度
+            loss = (loss_vec.permute(*torch.arange(loss_vec.ndim - 1, -1, -1)) @ weights[indices]) / loss_vec.size(0)
+
         else:
             loss = loss_vec.mean()
 
@@ -186,7 +189,13 @@ class Learner:
             loss_vec = self.criterion(y_pred, y)
             if weights is not None:
                 weights = weights.to(self.device)
-                loss = (loss_vec.T @ weights[indices]) / loss_vec.size(0)
+                # loss = (loss_vec.T @ weights[indices]) / loss_vec.size(0)
+                # # 使用 x.mT 转置批量矩阵
+                # loss = (loss_vec.mT @ weights[indices]) / loss_vec.size(0)
+
+                # # 或者使用 x.permute 反转张量的维度
+                loss = (loss_vec.permute(*torch.arange(loss_vec.ndim - 1, -1, -1)) @ weights[indices]) / loss_vec.size(0)
+
             else:
                 loss = loss_vec.mean()
             loss.backward()
