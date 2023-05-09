@@ -9,7 +9,7 @@ import numpy as np
 import numpy.linalg as LA
 
 from sklearn.metrics import pairwise_distances
-from sklearn.cluster import AgglomerativeClustering
+from sklearn.cluster import AgglomerativeClustering, KMeans
 
 from utils.torch_utils import *
 # from utils.utils import *
@@ -124,9 +124,11 @@ class Aggregator(ABC):
         self.sample_with_replacement = sample_with_replacement
         self.n_clients_per_round = max(1, int(self.sampling_rate * self.n_clients))
         self.sampled_clients = list()
-
+        # self.alpha_list = [torch.tensor(self.alpha, device=self.device) for _ in self.clients]
+        
         self.c_round = 0
-        self.write_logs()
+        if type(self) != GroupAPFL:
+            self.write_logs()
 
     @abstractmethod
     def mix(self):
@@ -145,28 +147,78 @@ class Aggregator(ABC):
             client.update_sample_weights()
             client.update_learners_weights()
 
+    # def write_logs(self):
+    #     self.update_test_clients()
+
+    #     for global_logger, clients in [
+    #         (self.global_train_logger, self.clients),
+    #         (self.global_test_logger, self.test_clients)
+    #     ]:
+    #         if len(clients) == 0:
+    #             continue
+
+    #         global_train_loss = 0.
+    #         global_train_acc = 0.
+    #         global_test_loss = 0.
+    #         global_test_acc = 0.
+
+    #         total_n_samples = 0
+    #         total_n_test_samples = 0
+
+    #         for client_id, client in enumerate(clients):
+    #             train_loss, train_acc, test_loss, test_acc = client.write_logs()
+
+    #             if self.verbose > 1:
+    #                 print("*" * 30)
+    #                 print(f"Client {client_id}..")
+
+    #                 with np.printoptions(precision=3, suppress=True):
+    #                     print("Pi: ", client.learners_weights.numpy())
+
+    #                 print(f"Train Loss: {train_loss:.3f} | Train Acc: {train_acc * 100:.3f}%| ", end="")
+    #                 print(f"Test Loss: {test_loss:.3f} | Test Acc: {test_acc * 100:.3f}% |")
+
+    #             global_train_loss += train_loss * client.n_train_samples
+    #             global_train_acc += train_acc * client.n_train_samples
+    #             global_test_loss += test_loss * client.n_test_samples
+    #             global_test_acc += test_acc * client.n_test_samples
+
+    #             total_n_samples += client.n_train_samples
+    #             total_n_test_samples += client.n_test_samples
+
+    #         global_train_loss /= total_n_samples
+    #         global_test_loss /= total_n_test_samples
+    #         global_train_acc /= total_n_samples
+    #         global_test_acc /= total_n_test_samples
+
+    #         if self.verbose > 0:
+    #             print("+" * 30)
+    #             print("Global..")
+    #             print(f"Train Loss: {global_train_loss:.3f} | Train Acc: {global_train_acc * 100:.3f}% |", end="")
+    #             print(f"Test Loss: {global_test_loss:.3f} | Test Acc: {global_test_acc * 100:.3f}% |")
+    #             print("+" * 50)
+
+    #         global_logger.add_scalar("Train/Loss", global_train_loss, self.c_round)
+    #         global_logger.add_scalar("Train/Metric", global_train_acc, self.c_round)
+    #         global_logger.add_scalar("Test/Loss", global_test_loss, self.c_round)
+    #         global_logger.add_scalar("Test/Metric", global_test_acc, self.c_round)
+
+    #     if self.verbose > 0:
+    #             print("#" * 80)
+
     def write_logs(self):
         self.update_test_clients()
 
-        for global_logger, clients in [
-            (self.global_train_logger, self.clients),
-            (self.global_test_logger, self.test_clients)
-        ]:
-            if len(clients) == 0:
-                continue
-
+        # Logging for Train
+        global_logger, clients = self.global_train_logger, self.clients
+        if len(clients) > 0:
+            # ... Rest of the code for logging Train data
             global_train_loss = 0.
             global_train_acc = 0.
-            global_test_loss = 0.
-            global_test_acc = 0.
-
             total_n_samples = 0
-            total_n_test_samples = 0
 
             for client_id, client in enumerate(clients):
-
-                train_loss, train_acc, test_loss, test_acc = client.write_logs()
-
+                train_loss, train_acc, _, _ = client.write_logs()
                 if self.verbose > 1:
                     print("*" * 30)
                     print(f"Client {client_id}..")
@@ -174,36 +226,48 @@ class Aggregator(ABC):
                     with np.printoptions(precision=3, suppress=True):
                         print("Pi: ", client.learners_weights.numpy())
 
-                    print(f"Train Loss: {train_loss:.3f} | Train Acc: {train_acc * 100:.3f}%|", end="")
-                    print(f"Test Loss: {test_loss:.3f} | Test Acc: {test_acc * 100:.3f}% |")
+                    print(f"Train Loss: {train_loss:.3f} | Train Acc: {train_acc * 100:.3f}%| ", end="")
 
                 global_train_loss += train_loss * client.n_train_samples
                 global_train_acc += train_acc * client.n_train_samples
-                global_test_loss += test_loss * client.n_test_samples
-                global_test_acc += test_acc * client.n_test_samples
 
                 total_n_samples += client.n_train_samples
-                total_n_test_samples += client.n_test_samples
+                
 
             global_train_loss /= total_n_samples
-            global_test_loss /= total_n_test_samples
             global_train_acc /= total_n_samples
-            global_test_acc /= total_n_test_samples
-
-            if self.verbose > 0:
-                print("+" * 30)
-                print("Global..")
-                print(f"Train Loss: {global_train_loss:.3f} | Train Acc: {global_train_acc * 100:.3f}% |", end="")
-                print(f"Test Loss: {global_test_loss:.3f} | Test Acc: {global_test_acc * 100:.3f}% |")
-                print("+" * 50)
 
             global_logger.add_scalar("Train/Loss", global_train_loss, self.c_round)
             global_logger.add_scalar("Train/Metric", global_train_acc, self.c_round)
+            if self.verbose > 0:
+                print("+" * 30)
+                print(f"Train Loss: {global_train_loss:.3f} | Train Acc: {global_train_acc * 100:.3f}% |", end="")
+        # Logging for Test
+        global_logger, clients = self.global_test_logger, self.test_clients
+        if len(clients) > 0:
+            # ... Rest of the code for logging Test data
+            global_test_loss = 0.
+            global_test_acc = 0.
+            total_n_test_samples = 0
+
+            for client_id, client in enumerate(clients):
+                _, _, test_loss, test_acc = client.write_logs()
+                global_test_loss += test_loss * client.n_test_samples
+                global_test_acc += test_acc * client.n_test_samples
+                total_n_test_samples += client.n_test_samples
+
+            global_test_loss /= total_n_test_samples
+            global_test_acc /= total_n_test_samples
+
             global_logger.add_scalar("Test/Loss", global_test_loss, self.c_round)
             global_logger.add_scalar("Test/Metric", global_test_acc, self.c_round)
+            if self.verbose > 0:
+                print(f"Test Loss: {global_test_loss:.3f} | Test Acc: {global_test_acc * 100:.3f}% |")
+                print("+" * 50)
 
         if self.verbose > 0:
             print("#" * 80)
+
 
     def save_state(self, dir_path):
         """
@@ -526,10 +590,10 @@ class ClusteredAggregator(Aggregator):
         self.tol_1 = tol_1
         self.tol_2 = tol_2
 
-        self.global_learners = LearnersEnsemble
+        self.global_learners = [self.global_learners_ensemble]
         self.clusters_indices = [np.arange(len(clients)).astype("int")]
         self.n_clusters = 1
-        self.global_learners=None
+        self.write_logs()
 
     def mix(self):
         clients_updates = np.zeros((self.n_clients, self.n_learners, self.model_dim))
@@ -552,7 +616,7 @@ class ClusteredAggregator(Aggregator):
             for learner_id in range(self.n_learners):
                 max_update_norm[learner_id] = LA.norm(clients_updates[indices], axis=1).max()
                 mean_update_norm[learner_id] = LA.norm(np.mean(clients_updates[indices], axis=0))
-            
+
             max_update_norm = max_update_norm.mean()
             mean_update_norm = mean_update_norm.mean()
 
@@ -573,7 +637,6 @@ class ClusteredAggregator(Aggregator):
 
         for cluster_id, indices in enumerate(self.clusters_indices):
             cluster_clients = [self.clients[i] for i in indices]
-            print(cluster_clients)
             for learner_id in range(self.n_learners):
                 average_learners(
                     learners=[client.learners_ensemble[learner_id] for client in cluster_clients],
@@ -601,6 +664,7 @@ class ClusteredAggregator(Aggregator):
 
     def update_test_clients(self):
         pass
+
  
 # Assuming the Aggregator class and other required classes are already defined
 # ...
@@ -613,15 +677,14 @@ class GroupAPFL(Aggregator):
             log_freq,
             global_train_logger,
             global_test_logger,
+            alpha=0.3,
             sampling_rate=1.,
             sample_with_replacement=False,
             test_clients=None,
-            alpha=0.2,
             verbose=0,
             seed=None,
             pre_rounds=1
     ):
-
         super(GroupAPFL, self).__init__(
             clients=clients,
             global_learners_ensemble=global_learners_ensemble,
@@ -635,18 +698,20 @@ class GroupAPFL(Aggregator):
             seed=seed
         )
 
-        assert self.n_learners == 2, "GroupAPFL only supports single learner clients."
+        assert self.n_learners == 2, "GroupAPFL only supports 2 learner clients."
         assert self.sampling_rate == 1.0, f"`sampling_rate` is {sampling_rate}, should be {1.0}," \
                                           f" GroupAPFL only supports full clients participation."
-
  
         self.clusters_indices = [np.arange(len(clients)).astype("int")]
+        print("clusters_indices:",self.clusters_indices)
         self.n_clusters = 1
         self.pre_rounds=pre_rounds
         self.alpha=alpha
-        self.alpha_list = [
-            torch.tensor(self.alpha, device=self.device) for _ in range(self.n_clients)
-        ]
+        self.alpha_list = []
+        self.global_learner=deepcopy(self.clients[0].learners_ensemble[0])
+        self.write_logs()
+        # self.alpha_list = [torch.tensor(client.alpha, device=self.device) for client in self.clients]
+        
     def mix(self):
         """
         Pre-train the model for the specified number of pre_rounds, perform clustering, and then perform federated learning.
@@ -655,141 +720,239 @@ class GroupAPFL(Aggregator):
 
         # Pre-training
         if self.c_round < self.pre_rounds:
-            print(f"=========Start pretrain at {self.c_round} round===========")
+            # self.tune_locally=True
+            
+            print(f"=========pretrain at {self.c_round} round===========")
+
+            clients_learners=[deepcopy(self.clients[0].learners_ensemble[0])for _ in range(self.n_clients)]
 
             for client_id, client in enumerate(self.clients):
                 clients_updates[client_id] = client.step()
+                average_learners(client.learners_ensemble.learners, clients_learners[client_id])
 
-            
-            learners = [client.learners_ensemble[0] for client in self.clients]
-            average_learners(learners, self.global_learners_ensemble[0], weights=self.clients_weights)
-             
-
+            average_learners(clients_learners, self.global_learner, weights=self.clients_weights)
             self.pre_update_clients()
+        
 
-        # Perform clustering
         elif self.n_clusters==1:
-            print(f"=============Start cluster================")
+            print(f"=============start clustering================")
+            for client_id, client in enumerate(self.clients):
+                clients_updates[client_id] = client.step()
+            n_clusters = 3
 
-            # similarities = np.zeros((self.n_learners, self.n_clients, self.n_clients))
-
-            # for learner_id in range(self.n_learners):
-            #     similarities[learner_id] = pairwise_distances(clients_updates[:, learner_id, :], metric="cosine")
-
-            # similarities = similarities.mean(axis=0)
-            similarities = np.zeros((self.n_clients, self.n_clients), dtype='float32')
-
+            similarities = np.zeros((self.n_clients, self.n_clients))
             similarities = pairwise_distances(clients_updates[:, 0, :], metric="cosine")
-            # similarities = similarities_learner_0.mean(axis=0)
 
             # Directly use AgglomerativeClustering to divide clients into 5 clusters
-            clustering = AgglomerativeClustering(n_clusters=5, metric="precomputed", linkage="complete")
+            clustering = AgglomerativeClustering(n_clusters=n_clusters, metric="precomputed", linkage="complete")
             clustering.fit(similarities)
-         
-            self.clusters_indices = [np.argwhere(clustering.labels_ == i).flatten() for i in range(5)]
-            print("\n分组情况：")
-            print(self.clusters_indices)
+            # 按组编号和客户端索引的二维列表形式存储聚类结果
+            self.clusters_indices = [np.argwhere(clustering.labels_ == i).flatten() for i in range(3)]
+            
             self.n_clusters = len(self.clusters_indices)
-            # self.clients[0].learners_ensemble[1]= deepcopy(self.clients[0].learners_ensemble[0])
-            learners = [deepcopy(self.clients[0].learners_ensemble[0]) for _ in range(self.n_clusters+1)]
-            self.global_learners=LearnersEnsemble(learners=learners, learners_weights=torch.ones(self.n_clusters+1) / (self.n_clusters+1))
-        # Perform fedavg
-      
+           
+            print(f"=============cluster completed================")
+            # 输出聚类结果
+            print("\n分为{}组 ：".format(self.n_clusters) )
+            for i, cluster in enumerate(self.clusters_indices):
+                print(f"簇 {i}: {cluster}")
+
+            for client in self.clients:
+                client.learners_ensemble[1]= deepcopy(client.learners_ensemble[0])
+
+            self.c_round -= 1
+
         else:
             '''
             client.learners_ensemble[0] 本地-组模型
             client.learners_ensemble[1] 全局模型
             '''
+
+            learners = [deepcopy(self.clients[0].learners_ensemble[0]) for _ in range(self.n_clusters)]
+            self.cluster_learners=LearnersEnsemble(learners=learners, learners_weights=torch.ones(self.n_clusters) / self.n_clusters)
+            self.alpha_list = torch.full((self.n_clusters,),self.alpha,device=self.global_learners_ensemble.device)
+
+            # self.tune_locally=False
+            print(f"\n=========train at {self.c_round} round===========")
+            for client_id, client in enumerate(self.clients):
+                clients_updates[client_id] = client.step()
+                
             cluster_weights= torch.zeros(self.n_clusters)
-            for client in self.clients:
-                client.step(single_batch_flag=True)
-                partial_average(
-                    learners=[client.learners_ensemble[0]],
-                    average_learner=client.learners_ensemble[1],
-                    alpha=self.alpha
-                )
             for cluster_id, indices in enumerate(self.clusters_indices):
                 cluster_clients = [self.clients[i] for i in indices]
                 cluster_weights[cluster_id] =self.clients_weights[indices].sum()
-                for learner_id in range(self.n_learners):
-                    average_learners(
-                        learners=[client.learners_ensemble[learner_id] for client in cluster_clients],
-                        target_learner=self.global_learners[cluster_id],
-                        weights=self.clients_weights[indices] / self.clients_weights[indices].sum()
-                    )
+                
+                average_learners(
+                    learners=[client.learners_ensemble[0] for client in cluster_clients],
+                    target_learner=self.cluster_learners[cluster_id],
+                    weights=self.clients_weights[indices] / cluster_weights[cluster_id]
+                )
+            if self.c_round==self.pre_rounds:
+                print("\n分组权重：",cluster_weights.tolist())
+            average_learners(
+                learners=[client.learners_ensemble[1] for client in self.clients],
+                target_learner=self.global_learner,
+                weights=self.clients_weights
+            )
+
                 # weights_sum = [self.clients_weights[indices] cluster_clients].sum()
                 # weights = [w / weights_sum for w in weights]
                 # self.clients_weights[indices] = weights
-            print("\n客户端权重：")
-            print(cluster_weights)
-            average_learners(
-                    learners=self.global_learners[:self.n_clusters],
-                    target_learner=self.global_learners[self.n_clusters],
-                    weights=cluster_weights
-                )
-                
-            self.update_clients()
+            
+            # self.update_alpha()
+            # for client in self.clients:
+            #     client.step(single_batch_flag=True)
 
+            for cluster_id  in range(self.n_clusters):
+                partial_average(
+                    learners=[self.cluster_learners[cluster_id]],
+                    average_learner=self.global_learner,
+                    alpha=self.alpha_list[cluster_id]
+                )
+            self.update_clients()
+                
         self.c_round += 1
 
         if self.c_round % self.log_freq == 0:
             self.write_logs()
-    # refers to https://github.com/MLOPTPSU/FedTorch/blob/b58da7408d783fd426872b63fbe0c0352c7fa8e4/fedtorch/comms/utils/flow_utils.py#L240
-    # def update_alpha(self):
-    #     alpha_grad = 0
-    #     for local_param, global_param in zip(
-    #         trainable_params(self.local_model), trainable_params(self.model)
-    #     ):
-    #         diff = (local_param.data - global_param.data).flatten()
-    #         grad = (
-    #             self.alpha * local_param.grad.data
-    #             + (1 - self.alpha) * global_param.grad.data
-    #         ).flatten()
-    #         alpha_grad += diff @ grad
-
-    #     alpha_grad += 0.02 * self.alpha
-    #     self.alpha.data -= self.local_lr * alpha_grad
-    #     self.alpha.clip_(0, 1.0)
-
-
+ 
     def update_clients(self):
         for cluster_id, indices in enumerate(self.clusters_indices):
             for i in indices:
                 learners=self.clients[i].learners_ensemble 
-                copy_model(learners[0].model, self.global_learners[cluster_id].model)
-                copy_model(learners[1].model, self.global_learners[self.n_clusters].model)
+                copy_model(learners[0].model, self.cluster_learners[cluster_id].model)
+                copy_model(learners[1].model, self.global_learner.model)
+                
          
     def pre_update_clients(self):
         for client in self.clients:
-            copy_model(client.learners_ensemble[0].model, self.global_learners_ensemble[0].model)
+            for learner in client.learners_ensemble:
+                copy_model(learner.model, self.global_learner.model)
 
             if callable(getattr(client.learners_ensemble[0].optimizer, "set_initial_params", None)):
                 client.learners_ensemble[0].optimizer.set_initial_params(
-                    self.global_learners_ensemble[0].model.parameters()
+                    self.global_learner.model.parameters()
                 )
 
     def update_test_clients(self):
         for client in self.test_clients:
-            copy_model(target=client.learners_ensemble[0].model, source=self.global_learners_ensemble[0].model)
+            for learner_id, learner in enumerate(client.learners_ensemble):
+                copy_model(target=learner.model, source=self.global_learner.model)
 
+        for client in self.test_clients:
+            client.update_sample_weights()
+            client.update_learners_weights()
+
+
+        # for client_id, client in enumerate(self.test_clients):
+        #     for learner in self.test_clients[client_id].learners_ensemble:
+        #         copy_model(learner.model, self.global_learner.model)
         # for client in self.test_clients:
         #     client.update_sample_weights()
         #     client.update_learners_weights(learner_id=0)
-    # def update_alpha(self):
-    #             alpha_grad = 0
-    #             for local_param, global_param in zip(
-    #                 trainable_params(self.local_model), trainable_params(self.model)
-    #             ):
-    #                 diff = (local_param.data - global_param.data).flatten()
-    #                 grad = (
-    #                     self.alpha * local_param.grad.data
-    #                     + (1 - self.alpha) * global_param.grad.data
-    #                 ).flatten()
-    #                 alpha_grad += diff @ grad
 
-    #             alpha_grad += 0.02 * self.alpha
-    #             self.alpha.data -= self.local_lr * alpha_grad
-    #             self.alpha.clip_(0, 1.0)
+    # def find_cluster(self,client):
+    #     copy_model(client.learners_ensemble[1].model, self.global_learner.model)
+    #     client_update=client.step()
+       
+    #     distances=[client.model-cluster.model  for cluster in self.cluster_learners]
+    #     nearest_cluster_idx = np.argmin(distances)
+    #     self.cluster_learners[nearest_cluster_idx].append(client)
+    def update_alpha(self):
+        alpha_grad = 0
+        alpha_lr=0.05
+        for cluster_id in  range(self.n_clusters):
+            diff = self.cluster_learners[cluster_id].get_param_tensor()-self.global_learner.get_param_tensor()
+            print(type(diff))
+            print(diff)
+            grad =  self.alpha_list[cluster_id] * self.cluster_learners[cluster_id].get_param_tensor() \
+                    + (1 - self.alpha_list[cluster_id]) *self.global_learner.get_param_tensor()
+            alpha_grad += diff @ grad
+
+            alpha_grad += 0.02 * self.alpha_list[cluster_id]
+            self.alpha_list[cluster_id].data -= alpha_lr * alpha_grad
+            self.alpha_list[cluster_id].clip_(0, 1.0)
+        print("alpha_list:",self.alpha_list.cpu().detach().tolist())
+        
+    def write_logs(self):
+        # Logging for Test
+
+        self.update_test_clients()
+        global_logger, clients = self.global_test_logger, self.test_clients
+        if len(self.clients) == 0:
+            return
+            # ... Rest of the code for logging Test data
+        global_test_loss = 0.
+        global_test_acc = 0.
+        total_n_test_samples = 0
+
+        for client_id, client in enumerate(clients): 
+            _, _, test_loss, test_acc, _, _, _, _ = client.write_logs()
+            global_test_loss += test_loss * client.n_test_samples
+            global_test_acc += test_acc * client.n_test_samples
+            total_n_test_samples += client.n_test_samples
+
+        global_test_loss /= total_n_test_samples
+        global_test_acc /= total_n_test_samples
+
+        global_logger.add_scalar("Test/Loss", global_test_loss, self.c_round)
+        global_logger.add_scalar("Test/Metric", global_test_acc, self.c_round)
+        if self.verbose > 0:
+            print("+" * 50)
+            print(f"Global Test Loss: {global_test_loss:.3f} | Test Acc: {global_test_acc * 100:.3f}% |")
+            print("+" * 50)
+
+        global_logger,clients= self.global_train_logger, self.clients
+         
+        if len(self.clients) == 0:
+            return
+
+        cluster_train_loss = 0.
+        cluster_train_acc = 0.
+        global_train_loss = 0.
+        global_train_acc = 0.
+
+        total_n_samples = 0
+
+        for client_id, client in enumerate(clients):
+            train_loss, train_acc, _, _, train_loss2, \
+                    train_acc2, _, _ = client.write_logs()
+            if self.verbose > 1:
+                print("*" * 30)
+                print(f"Client {client_id}..")
+
+                with np.printoptions(precision=3, suppress=True):
+                    print("Pi: ", client.learners_weights.numpy())
+
+                print(f"Train Loss: {train_loss:.3f} | Train Acc: {train_acc * 100:.3f}%| ", end="")
+
+            cluster_train_loss += train_loss * client.n_train_samples
+            cluster_train_acc += train_acc * client.n_train_samples 
+            global_train_loss += train_loss2 * client.n_train_samples
+            global_train_acc += train_acc2 * client.n_train_samples 
+
+            total_n_samples += client.n_train_samples
+
+        cluster_train_loss /= total_n_samples
+        cluster_train_acc /= total_n_samples
+        global_train_loss /= total_n_samples
+        global_train_acc /= total_n_samples
+
+        if self.verbose > 0:
+            print("+" * 30)
+            if self.c_round>50:
+                print(f"Cluster Train Loss: {cluster_train_loss:.3f} | Train Acc: {cluster_train_acc * 100:.3f}% |")
+            print(f"Global Train Loss: {global_train_loss:.3f} | Train Acc: {global_train_acc * 100:.3f}% |")
+            print("+" * 50)
+
+        global_logger.add_scalar("Cluster_Train/Loss", cluster_train_loss, self.c_round)
+        global_logger.add_scalar("Cluster_Train/Metric", cluster_train_acc, self.c_round)
+        global_logger.add_scalar("Global_Train/Loss", global_train_loss, self.c_round)
+        global_logger.add_scalar("Global_Train/Metric", global_train_acc, self.c_round)
+
+        if self.verbose > 0:
+            print("#" * 80)
+
 
 class AgnosticAggregator(CentralizedAggregator):
     """

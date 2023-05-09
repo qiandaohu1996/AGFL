@@ -2,7 +2,7 @@ import torch.nn.functional as F
 
 from copy import deepcopy
 from utils.torch_utils import *
-
+from utils.utils import *
 
 class Client(object):
     r"""Implements one clients
@@ -48,11 +48,12 @@ class Client(object):
             val_iterator,
             test_iterator,
             logger,
-            local_steps,
+            local_steps=2,
             tune_locally=False
     ):
 
         self.learners_ensemble = learners_ensemble
+  
         self.n_learners = len(self.learners_ensemble)
         self.tune_locally = tune_locally
 
@@ -175,8 +176,87 @@ class AGFLClient(Client):
             local_steps,
             tune_locally
         )
+             # self.local_model=deepcopy(self.learners_ensemble[0].model)
+
+        self.svrg_interval = svrg_interval
+        self.reference_model = deepcopy(self.learners_ensemble[1])
+    
+    def step(self, single_batch_flag=False, *args, **kwargs):
+        """
+        perform on step for the client
+
+        :param single_batch_flag: if true, the client only uses one batch to perform the update
+        :return
+            clients_updates: ()
+        """
+        self.counter += 1
+        self.update_sample_weights()
+        self.update_learners_weights()
 
 
+        if self.counter % self.svrg_interval == 0:
+            self.update_reference_models()
+
+        if single_batch_flag:
+            batch = self.get_next_batch()
+            client_updates = \
+                self.learners_ensemble.fit_batch(
+                    batch=batch,
+                    weights=self.samples_weights
+                )
+        else:
+            client_updates = \
+                self.learners_ensemble.fit_epochs(
+                    iterator=self.train_iterator,
+                    n_epochs=self.local_steps,
+                    weights=self.samples_weights
+                )
+        # if self.args.adaptive_alpha:
+        # self.update_alpha()
+        # TODO: add flag arguments to use `free_gradients`
+        # self.learners_ensemble.free_gradients()
+
+        return client_updates
+    
+    def update_reference_models(self):
+        copy_model(source=self.learners_ensemble[0].model, target=self.reference_model.model)
+
+    def write_logs(self):
+        if self.tune_locally:
+            self.update_tuned_learners()
+
+        if self.tune_locally:
+            train_loss, train_acc = self.tuned_learners_ensemble[0].evaluate_iterator(self.val_iterator)
+            test_loss, test_acc = self.tuned_learners_ensemble[0].evaluate_iterator(self.test_iterator)
+            train_loss2, train_acc2 = self.tuned_learners_ensemble[1].evaluate_iterator(self.val_iterator)
+            test_loss2, test_acc2 = self.tuned_learners_ensemble[1].evaluate_iterator(self.test_iterator)
+        else:
+            train_loss, train_acc = self.learners_ensemble[0].evaluate_iterator(self.val_iterator)
+            test_loss, test_acc = self.learners_ensemble[0].evaluate_iterator(self.test_iterator)
+            train_loss2, train_acc2 = self.learners_ensemble[1].evaluate_iterator(self.val_iterator)
+            test_loss2, test_acc2 = self.learners_ensemble[1].evaluate_iterator(self.test_iterator)
+
+        self.logger.add_scalar("Cluster_Train/Loss", train_loss, self.counter)
+        self.logger.add_scalar("Cluster_Train/Metric", train_acc, self.counter)
+        self.logger.add_scalar("Cluster_Test/Loss", test_loss, self.counter)
+        self.logger.add_scalar("Cluster_Test/Metric", test_acc, self.counter)    
+
+        self.logger.add_scalar("Global_Train/Loss", train_loss2, self.counter)
+        self.logger.add_scalar("Global_Train/Metric", train_acc2, self.counter)
+        self.logger.add_scalar("Global_Test/Loss", test_loss2, self.counter)
+        self.logger.add_scalar("Global_Test/Metric", test_acc2, self.counter)   
+
+        return train_loss, train_acc, test_loss, test_acc, train_loss2, train_acc2, test_loss2, test_acc2
+
+    # def set_parameters(self, new_parameters: OrderedDict[str, torch.nn.Parameter]):
+    #     super().set_parameters(new_parameters)
+    #     self.local_model.load_state_dict(self.local_params_dict[self.client_id])
+    #     self.alpha = self.alpha_list[self.client_id]
+
+    # def save_state(self):
+    #     super().save_state()
+    #     self.local_params_dict[self.client_id] = deepcopy(self.local_model.state_dict())
+    #     self.alpha_list[self.client_id] = self.alpha.clone()
 
 class AGFLSVRGClient(Client):
     def __init__(

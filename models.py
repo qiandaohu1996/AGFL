@@ -3,6 +3,8 @@ import torch.nn.functional as F
 
 import torchvision.models as models
 
+from torchvision.models import MobileNetV2
+# from torchvision.models.mobilenetv2 import MobileNetV2Weights
 
 class LinearLayer(nn.Module):
     def __init__(self, input_dimension, num_classes, bias=True):
@@ -28,8 +30,8 @@ class FemnistCNN(nn.Module):
         self.pool = nn.MaxPool2d(2, 2)
         self.conv2 = nn.Conv2d(32, 64, 5)
 
-        self.fc1 = nn.Linear(64 * 4 * 4, 2048)
-        self.output = nn.Linear(2048, num_classes)
+        self.fc1 = nn.Linear(64 * 4 * 4, 1024)
+        self.output = nn.Linear(1024, num_classes)
 
     def forward(self, x):
         x = self.pool(F.relu(self.conv1(x)))
@@ -118,7 +120,7 @@ def get_mobilenet(n_classes):
     :param n_classes:
     :return: nn.Module
     """
-    model = models.mobilenet_v2(pretrained=True)
+    model = MobileNetV2(weights=MobileNetV2.MobileNet_V2_Weights.DEFAULT)
     model.classifier[1] = nn.Linear(model.classifier[1].in_features, n_classes)
 
     return model
