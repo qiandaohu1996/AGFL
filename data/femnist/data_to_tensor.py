@@ -12,6 +12,9 @@ from tqdm import tqdm
 
 from PIL import Image
 
+def load_obj(name):
+    with open(name + '.pkl', 'rb') as f:
+        return pickle.load(f)
 
 def relabel_class(c):
     """

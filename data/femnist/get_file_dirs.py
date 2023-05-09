@@ -60,7 +60,9 @@ for cl in classes:
 
         for image_dir in image_dirs:
             class_files.append((cl, image_dir))
-
+save_obj(
+    class_files,
+    os.path.join('intermediate', 'class_file_dirs'))
 
 write_dir = os.path.join('raw_data', 'by_write')
 write_parts = os.listdir(write_dir)
@@ -84,9 +86,7 @@ for write_part in write_parts:
             for image_dir in image_dirs:
                 write_files.append((writer, image_dir))
 
-save_obj(
-    class_files,
-    os.path.join('intermediate', 'class_file_dirs'))
+
 save_obj(
     write_files,
     os.path.join('intermediate', 'write_file_dirs'))

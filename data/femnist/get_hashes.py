@@ -42,6 +42,8 @@ wfd = os.path.join('intermediate', 'write_file_dirs')
 class_file_dirs = load_obj(cfd)
 write_file_dirs = load_obj(wfd)
 
+print(len(class_file_dirs))
+print(len(write_file_dirs))
 class_file_hashes = []
 write_file_hashes = []
 
