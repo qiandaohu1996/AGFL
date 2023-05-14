@@ -3,6 +3,72 @@ import torch.optim as optim
 from torch.optim.optimizer import Optimizer, required
 import numpy as np
 
+class SVRG(Optimizer):
+    r""" implement SVRG """ 
+
+    def __init__(self, parameters, lr=required, freq =10):
+        if lr is not required and lr < 0.0:
+            raise ValueError("Invalid learning rate: {}".format(lr))
+
+        defaults = dict(lr=lr, freq=freq)
+        self.step_counter = 0
+        self.inner_loop_counter = 0
+        self.is_first_step = False
+        super(SVRG, self).__init__(parameters, defaults)
+
+    def __setstate__(self, state):
+        super(SVRG, self).__setstate__(state)
+
+    def step(self, closure=None):
+        """Performs a single optimization step.
+
+        Arguments:
+            closure (callable, optional): A closure that reevaluates the model
+                and returns the loss.
+        """
+        loss = None
+        if closure is not None:
+            loss = closure()
+
+        for group in self.param_groups:
+            frequency = group['freq']
+            for param in group['params']:
+                if param.grad is None:
+                    continue
+                gradient = param.grad.data
+                param_state = self.state[param]
+                
+                if 'large_batch_gradient' not in param_state:
+                    buf = param_state['large_batch_gradient'] = torch.zeros_like(param.data)
+                    buf.add_(gradient)
+                    buf2 = param_state['small_batch_gradient'] = torch.zeros_like(param.data)
+
+                buf = param_state['large_batch_gradient']
+                buf2 = param_state['small_batch_gradient']
+
+                if self.step_counter == frequency:
+                    buf.data = gradient.clone()
+                    temp = torch.zeros_like(param.data)
+                    buf2.data = temp.clone()
+                    
+                if self.inner_loop_counter == 1:
+                    buf2.data.add_(gradient)
+
+                if self.step_counter != frequency and self.is_first_step != False:
+                    param.data.add_(-group['lr'], (gradient - buf2 + buf) )
+
+        self.is_first_step = True 
+        
+        if self.step_counter == frequency:
+            self.step_counter = 0
+            self.inner_loop_counter = 0
+
+        self.step_counter += 1    
+        self.inner_loop_counter += 1
+
+        return loss
+
+    
 
 class ProxSGD(Optimizer):
     r"""Adaptation of  torch.optim.SGD to proximal stochastic gradient descent (optionally with momentum),
@@ -49,7 +115,7 @@ class ProxSGD(Optimizer):
                         weight_decay=weight_decay, nesterov=nesterov)
         if nesterov and (momentum <= 0 or dampening != 0):
             raise ValueError("Nesterov momentum requires a momentum and zero dampening")
-        super(ProxSGD, self).__init__(params, defaults)
+        super(ProxSGD, self).__init__(params, params)
 
         self.mu = mu
 
@@ -128,9 +194,71 @@ class ProxSGD(Optimizer):
             for param, initial_param in zip(param_group['params'], initial_param_group['params']):
                 param_state = self.state[param]
                 param_state['initial_params'] = torch.clone(initial_param.data)
+ 
 
 
-def get_optimizer(optimizer_name, model, lr_initial, mu=0.):
+class PerGodGradientDescent(Optimizer):
+    """Implementation of Perturbed Gold Gradient Descent, i.e., FedDane optimizer"""
+    def __init__(self, params, lr=0.001, mu=0.01):
+        if lr < 0.0:
+            raise ValueError("Invalid learning rate: {}".format(lr))
+        if mu < 0.0:
+            raise ValueError("Invalid mu value: {}".format(mu))
+
+        defaults = dict(lr=lr, mu=mu)
+        super(PerGodGradientDescent, self).__init__(params, defaults)
+
+    @torch.no_grad()
+    def step(self, closure=None):
+        """Performs a single optimization step."""
+
+        loss = None
+        if closure is not None:
+            with torch.enable_grad():
+                loss = closure()
+
+        for group in self.param_groups:
+            for p in group['params']:
+                if p.grad is None:
+                    continue
+
+                grad = p.grad
+                state = self.state[p]
+
+                # State initialization
+                if len(state) == 0:
+                    state['step'] = 0
+                    state['vstar'] = torch.zeros_like(p.data)
+                    state['gold'] = torch.zeros_like(p.data)
+
+                vstar, gold = state['vstar'], state['gold']
+
+                state['step'] += 1
+
+                lr = group['lr']
+                mu = group['mu']
+
+                # Update the parameter value
+                p.data -= lr * (grad + gold + mu * (p.data - vstar))
+
+    def set_params(self, cog, avg_gradient, client):
+        with torch.no_grad():
+            for p, cog_value in zip(client.model.parameters(), cog):
+                state = self.state[p]
+                state['vstar'].copy_(cog_value)
+
+            # Get old gradient
+            gprev = client.get_grads()
+
+            # Calculate g_t - F'(old)
+            gdiff = [g1 - g2 for g1, g2 in zip(avg_gradient, gprev)]
+
+            for p, grad in zip(client.model.parameters(), gdiff):
+                state = self.state[p]
+                state['gold'].copy_(grad)
+
+
+def get_optimizer(optimizer_name, model, lr_initial, freq=10, mu=0.):
     """
     Gets torch.optim.Optimizer given an optimizer name, a model and learning rate
 
@@ -163,6 +291,20 @@ def get_optimizer(optimizer_name, model, lr_initial, mu=0.):
 
     elif optimizer_name == "prox_sgd":
         return ProxSGD(
+            [param for param in model.parameters() if param.requires_grad],
+            mu=mu,
+            lr=lr_initial,
+            momentum=0.,
+            weight_decay=5e-4
+        )
+    elif optimizer_name == "svrg":
+        return SVRG(
+            [param for param in model.parameters() if param.requires_grad],
+            lr=lr_initial,
+            freq=freq
+        )
+    elif optimizer_name == "pggd":
+        return PerGodGradientDescent(
             [param for param in model.parameters() if param.requires_grad],
             mu=mu,
             lr=lr_initial,

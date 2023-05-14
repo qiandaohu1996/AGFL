@@ -198,6 +198,42 @@ def get_learners_ensemble(
     else:
         return LearnersEnsemble(learners=learners, learners_weights=learners_weights)
 
+def get_agfl_learners_ensemble(
+        n_learners,
+        name,
+        device,
+        optimizer_name,
+        scheduler_name,
+        initial_lr,
+        mu,
+        n_rounds,
+        seed,
+        alpha,
+        adaptive_alpha,
+        lr_lambda=0.05,
+        input_dim=None,
+        output_dim=None
+):
+ 
+    learners = [
+        get_learner(
+            name=name,
+            device=device,
+            optimizer_name=optimizer_name,
+            scheduler_name=scheduler_name,
+            initial_lr=initial_lr,
+            input_dim=input_dim,
+            output_dim=output_dim,
+            n_rounds=n_rounds,
+            seed=seed + learner_id,
+            mu=mu
+        ) for learner_id in range(n_learners)
+    ]
+
+    learners_weights = torch.ones(n_learners) / n_learners
+ 
+    return AGFLLearnersEnsemble(learners=learners, learners_weights=learners_weights, alpha=alpha,
+                    adaptive_alpha=adaptive_alpha, lr_lambda=lr_lambda)
 
 def get_loaders(type_, root_path, batch_size, is_validation):
     """
@@ -364,6 +400,17 @@ def get_client(
             tune_locally=tune_locally,
             q=q
         )
+    elif client_type == "AGFL":
+        return AGFLClient(
+            learners_ensemble=learners_ensemble,
+            train_iterator=train_iterator,
+            val_iterator=val_iterator,
+            test_iterator=test_iterator,
+            logger=logger,
+            local_steps=local_steps,
+            tune_locally=tune_locally,
+        )
+         
     else:
         return Client(
             learners_ensemble=learners_ensemble,
@@ -391,6 +438,8 @@ def get_aggregator(
         global_test_logger,
         test_clients,
         verbose,
+        pre_rounds,
+        single_batch_flag,
         seed=None
 ):
     """
@@ -409,6 +458,7 @@ def get_aggregator(
     :param global_train_logger:
     :param global_test_logger:
     :param test_clients
+    :param pre_rounds
     :param verbose: level of verbosity
     :param seed: default is None
     :return:
@@ -423,6 +473,7 @@ def get_aggregator(
             global_train_logger=global_train_logger,
             global_test_logger=global_test_logger,
             test_clients=test_clients,
+            single_batch_flag=single_batch_flag,
             sampling_rate=sampling_rate,
             verbose=verbose,
             seed=seed
@@ -437,6 +488,7 @@ def get_aggregator(
             test_clients=test_clients,
             sampling_rate=sampling_rate,
             verbose=verbose,
+            single_batch_flag=single_batch_flag,
             seed=seed
         )
     elif aggregator_type == "personalized":
@@ -447,6 +499,7 @@ def get_aggregator(
             global_train_logger=global_train_logger,
             global_test_logger=global_test_logger,
             test_clients=test_clients,
+            single_batch_flag=single_batch_flag,
             sampling_rate=sampling_rate,
             verbose=verbose,
             seed=seed
@@ -459,6 +512,7 @@ def get_aggregator(
             test_clients=test_clients,
             global_train_logger=global_train_logger,
             global_test_logger=global_test_logger,
+            single_batch_flag=single_batch_flag,
             sampling_rate=sampling_rate,
             verbose=verbose,
             seed=seed
@@ -473,6 +527,7 @@ def get_aggregator(
             test_clients=test_clients,
             communication_probability=communication_probability,
             penalty_parameter=mu,
+            single_batch_flag=single_batch_flag,
             sampling_rate=sampling_rate,
             verbose=verbose,
             seed=seed
@@ -486,6 +541,7 @@ def get_aggregator(
             lr_lambda=lr_lambda,
             global_train_logger=global_train_logger,
             global_test_logger=global_test_logger,
+            single_batch_flag=single_batch_flag,
             sampling_rate=sampling_rate,
             verbose=verbose,
             seed=seed
@@ -500,6 +556,7 @@ def get_aggregator(
             q=q,
             global_train_logger=global_train_logger,
             global_test_logger=global_test_logger,
+            single_batch_flag=single_batch_flag,
             sampling_rate=sampling_rate,
             verbose=verbose,
             seed=seed
@@ -517,6 +574,7 @@ def get_aggregator(
             global_train_logger=global_train_logger,
             global_test_logger=global_test_logger,
             sampling_rate=sampling_rate,
+            single_batch_flag=single_batch_flag,
             verbose=verbose,
             seed=seed
         )
@@ -525,10 +583,12 @@ def get_aggregator(
             clients=clients,
             global_learners_ensemble=global_learners_ensemble,
             log_freq=log_freq,
+            pre_rounds=pre_rounds,
             test_clients=test_clients,
             global_train_logger=global_train_logger,
             global_test_logger=global_test_logger,
             sampling_rate=sampling_rate,
+            single_batch_flag=single_batch_flag,
             verbose=verbose,
             seed=seed
         )
@@ -540,6 +600,7 @@ def get_aggregator(
             test_clients=test_clients,
             global_train_logger=global_train_logger,
             global_test_logger=global_test_logger,
+            single_batch_flag=single_batch_flag,
             sampling_rate=sampling_rate,
             verbose=verbose,
             seed=seed

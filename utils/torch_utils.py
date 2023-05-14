@@ -1,3 +1,4 @@
+from typing import List, OrderedDict, Tuple, Union
 import warnings
 
 import torch
@@ -94,7 +95,8 @@ def partial_average(learners, average_learner, alpha):
             for target_state_dict in target_state_dicts:
                 target_state_dict[key].data =\
                     (1-alpha) * target_state_dict[key].data + alpha * source_state_dict[key].data
-
+                # print(f"key: {key}, target_state_dict[key].data: {target_state_dict[key].data}, source_state_dict[key].data: {source_state_dict[key].data}")
+         
     
 def differentiate_learner(target, reference_state_dict, coeff=1.):
     """
@@ -182,3 +184,24 @@ def simplex_projection(v, s=1):
     return w
 
 
+
+
+# def trainable_params(src: Union[OrderedDict[str, torch.Tensor], torch.nn.Module], requires_name=False
+# ) -> Union[List[torch.Tensor], Tuple[List[str], List[torch.Tensor]]]:
+#     parameters = []
+#     keys = []
+#     if isinstance(src, OrderedDict):
+#         for name, param in src.items():
+#             if param.requires_grad:
+#                 parameters.append(param)
+#                 keys.append(name)
+#     elif isinstance(src, torch.nn.Module):
+#         for name, param in src.state_dict(keep_vars=True).items():
+#             if param.requires_grad:
+#                 parameters.append(param)
+#                 keys.append(name)
+
+#     if requires_name:
+#         return keys, parameters
+#     else:
+#         return parameters

@@ -55,7 +55,17 @@ def parse_args(args_list=None):
         type=float,
         default=1.0
     )
-    
+    parser.add_argument(
+        '--alpha',
+        help='weighted mixture coefficients of global and local models; default is 0.2',
+        type=float,
+        default=0.2
+    )
+    parser.add_argument(
+        '--adaptive_alpha',
+        help='if selected, update alpha, using in AGFL or APFL',
+        action='store_true'
+    )
     parser.add_argument(
         '--input_dimension',
         help='the dimension of one input sample; only used for synthetic dataset',
@@ -72,7 +82,7 @@ def parse_args(args_list=None):
         '--n_learners',
         help='number of learners_ensemble to be used with `FedEM`; ignored if method is not `FedEM`; default is 3',
         type=int,
-        default=3
+        default=1
     )
     parser.add_argument(
         '--pre_rounds',
@@ -85,6 +95,11 @@ def parse_args(args_list=None):
         help='number of communication rounds; default is 1',
         type=int,
         default=1
+    )
+    parser.add_argument(
+        '--minibatch',
+        help='if selected,  choose minibatch gradient descent',
+        action='store_true'
     )
     parser.add_argument(
         '--bz',
@@ -134,7 +149,7 @@ def parse_args(args_list=None):
              ' possible are "sqrt", "linear", "cosine_annealing", "multi_step" and "constant" (no learning rate decay);'
              'default is "constant"',
         type=str,
-        default="constant"
+        default="multi_step"
     )
     parser.add_argument(
         "--mu",
@@ -144,9 +159,9 @@ def parse_args(args_list=None):
     )
     parser.add_argument(
         "--tau",
-        help='alobal aggregate every tau group tarin rounds , used when --optimizer=`agfl`; default is `10`',
+        help='global aggregate every tau group tarin rounds , used when --optimizer=`agfl`; default is `10`',
         type=int,
-        default=0
+        default=10
     )
     parser.add_argument(
         "--communication_probability",
