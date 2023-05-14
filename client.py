@@ -1,8 +1,9 @@
 import torch.nn.functional as F
 
 from copy import deepcopy
+from learners.learners_ensemble import LearnersEnsemble
 from utils.torch_utils import *
-from utils.utils import *
+# from utils.utils import *
 
 class Client(object):
     r"""Implements one clients
@@ -83,6 +84,7 @@ class Client(object):
     def get_next_batch(self):
         try:
             batch = next(self.train_loader)
+            
         except StopIteration:
             self.train_loader = iter(self.train_iterator)
             batch = next(self.train_loader)
@@ -103,6 +105,7 @@ class Client(object):
 
         if single_batch_flag:
             batch = self.get_next_batch()
+
             client_updates = \
                 self.learners_ensemble.fit_batch(
                     batch=batch,
@@ -115,7 +118,7 @@ class Client(object):
                     n_epochs=self.local_steps,
                     weights=self.samples_weights
                 )
-
+        
         # TODO: add flag arguments to use `free_gradients`
         # self.learners_ensemble.free_gradients()
 
@@ -165,7 +168,7 @@ class AGFLClient(Client):
             logger,
             local_steps,
             tune_locally=False,
-            svrg_interval=5
+            # svrg_interval=5
     ):
         super().__init__(
             learners_ensemble,
@@ -176,10 +179,44 @@ class AGFLClient(Client):
             local_steps,
             tune_locally
         )
-             # self.local_model=deepcopy(self.learners_ensemble[0].model)
+        self.counter = 0
+        # self.pre_sgd_model=deepcopy(self.learners_ensemble[0].model)
+        # self.cluster_gd_model=deepcopy(self.learners_ensemble[0].model)
+        # self.svrg_interval = svrg_interval
+        # self.reference_model = deepcopy(self.learners_ensemble[1])
+        # self.alpha=self.learners_ensemble.alpha
+    def pre_step(self, single_batch_flag=False, *args, **kwargs):
+        """
+        perform on step for the client
 
-        self.svrg_interval = svrg_interval
-        self.reference_model = deepcopy(self.learners_ensemble[1])
+        :param single_batch_flag: if true, the client only uses one batch to perform the update
+        :return
+            clients_updates: ()
+        """
+        self.counter += 1
+        self.update_sample_weights()
+        self.update_learners_weights()
+        
+        # if self.counter % self.svrg_interval == 0:
+        #     self.update_reference_models()
+
+        if single_batch_flag:
+            batch = self.get_next_batch()
+            client_updates = \
+            LearnersEnsemble.fit_batch(self.learners_ensemble, batch=batch,
+                                    weights=self.samples_weights) 
+        else:
+            client_updates = \
+            LearnersEnsemble.fit_epochs(self.learners_ensemble, 
+                                        iterator=self.train_iterator,
+                                        n_epochs=self.local_steps,
+                                        weights=self.samples_weights) 
+
+        # TODO: add flag arguments to use `free_gradients`
+        # self.learners_ensemble.free_gradients()
+
+        return client_updates
+    
     
     def step(self, single_batch_flag=False, *args, **kwargs):
         """
@@ -193,9 +230,8 @@ class AGFLClient(Client):
         self.update_sample_weights()
         self.update_learners_weights()
 
-
-        if self.counter % self.svrg_interval == 0:
-            self.update_reference_models()
+        # if self.counter % self.svrg_interval == 0:
+        #     self.update_reference_models()
 
         if single_batch_flag:
             batch = self.get_next_batch()
@@ -211,15 +247,25 @@ class AGFLClient(Client):
                     n_epochs=self.local_steps,
                     weights=self.samples_weights
                 )
-        # if self.args.adaptive_alpha:
-        # self.update_alpha()
         # TODO: add flag arguments to use `free_gradients`
         # self.learners_ensemble.free_gradients()
 
         return client_updates
     
-    def update_reference_models(self):
-        copy_model(source=self.learners_ensemble[0].model, target=self.reference_model.model)
+    def svrg_step(self, *args, **kwargs):
+        """
+        perform svrg on step for the client 
+ 
+        """
+        self.counter += 1
+        self.update_sample_weights()
+        self.update_learners_weights()
+
+        self.learners_ensemble.fit_epochs(
+                    iterator=self.train_iterator,
+                    n_epochs=self.local_steps,
+                    weights=self.samples_weights
+                )
 
     def write_logs(self):
         if self.tune_locally:
@@ -248,15 +294,7 @@ class AGFLClient(Client):
 
         return train_loss, train_acc, test_loss, test_acc, train_loss2, train_acc2, test_loss2, test_acc2
 
-    # def set_parameters(self, new_parameters: OrderedDict[str, torch.nn.Parameter]):
-    #     super().set_parameters(new_parameters)
-    #     self.local_model.load_state_dict(self.local_params_dict[self.client_id])
-    #     self.alpha = self.alpha_list[self.client_id]
 
-    # def save_state(self):
-    #     super().save_state()
-    #     self.local_params_dict[self.client_id] = deepcopy(self.local_model.state_dict())
-    #     self.alpha_list[self.client_id] = self.alpha.clone()
 
 class AGFLSVRGClient(Client):
     def __init__(
@@ -282,7 +320,7 @@ class AGFLSVRGClient(Client):
         self.svrg_interval = svrg_interval
         self.reference_models = deepcopy(self.learners_ensemble)
 
-    def step(self, single_batch_flag=False, *args, **kwargs):
+    def step(self, single_batch_flag=True, *args, **kwargs):
         self.counter += 1
         self.update_sample_weights()
         self.update_learners_weights()
