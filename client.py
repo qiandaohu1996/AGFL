@@ -84,12 +84,19 @@ class Client(object):
     def get_next_batch(self):
         try:
             batch = next(self.train_loader)
-            
         except StopIteration:
             self.train_loader = iter(self.train_iterator)
             batch = next(self.train_loader)
-
+        except:
+            # 处理最后一批次的情况
+            batch = None
         return batch
+    
+    def fit_all_batch(self, iterator, weights=None):
+
+        for batch in iterator:
+            batch = self.get_next_batch()
+            self.fit_batch(batch, weights)
 
     def step(self, single_batch_flag=False, *args, **kwargs):
         """
@@ -123,6 +130,8 @@ class Client(object):
         # self.learners_ensemble.free_gradients()
 
         return client_updates
+
+   
 
     def write_logs(self):
         if self.tune_locally:
@@ -156,8 +165,6 @@ class Client(object):
             copy_model(source=self.learners_ensemble[learner_id].model, target=learner.model)
             learner.fit_epochs(self.train_iterator, self.local_steps, weights=self.samples_weights[learner_id])
  
- 
-
 class AGFLClient(Client):
     def __init__(
             self,
@@ -170,21 +177,17 @@ class AGFLClient(Client):
             tune_locally=False,
             # svrg_interval=5
     ):
-        super().__init__(
-            learners_ensemble,
-            train_iterator,
-            val_iterator,
-            test_iterator,
-            logger,
-            local_steps,
-            tune_locally
+        super(AGFLClient,self).__init__(
+            learners_ensemble=learners_ensemble,
+            train_iterator=train_iterator,
+            val_iterator=val_iterator,
+            test_iterator=test_iterator,
+            logger=logger,
+            local_steps=local_steps,
+            tune_locally=tune_locally
         )
         self.counter = 0
-        # self.pre_sgd_model=deepcopy(self.learners_ensemble[0].model)
-        # self.cluster_gd_model=deepcopy(self.learners_ensemble[0].model)
-        # self.svrg_interval = svrg_interval
         # self.reference_model = deepcopy(self.learners_ensemble[1])
-        # self.alpha=self.learners_ensemble.alpha
     def pre_step(self, single_batch_flag=False, *args, **kwargs):
         """
         perform on step for the client
@@ -197,20 +200,21 @@ class AGFLClient(Client):
         self.update_sample_weights()
         self.update_learners_weights()
         
-        # if self.counter % self.svrg_interval == 0:
-        #     self.update_reference_models()
 
+        # print("self.samples_weights.size():",self.samples_weights.size())
         if single_batch_flag:
             batch = self.get_next_batch()
             client_updates = \
-            LearnersEnsemble.fit_batch(self.learners_ensemble, batch=batch,
-                                    weights=self.samples_weights) 
+            self.learners_ensemble[0].pre_fit_batch(batch=batch,
+                                    weights=self.samples_weights[0]
+                                    ) 
         else:
             client_updates = \
-            LearnersEnsemble.fit_epochs(self.learners_ensemble, 
+            self.learners_ensemble[0].pre_fit_epochs(
                                         iterator=self.train_iterator,
                                         n_epochs=self.local_steps,
-                                        weights=self.samples_weights) 
+                                        weights=self.samples_weights[0]
+                                        ) 
 
         # TODO: add flag arguments to use `free_gradients`
         # self.learners_ensemble.free_gradients()
@@ -252,20 +256,54 @@ class AGFLClient(Client):
 
         return client_updates
     
-    def svrg_step(self, *args, **kwargs):
-        """
-        perform svrg on step for the client 
+    def saga_step(self, n_cluster_clients, *args, **kwargs):
  
-        """
-        self.counter += 1
         self.update_sample_weights()
         self.update_learners_weights()
 
-        self.learners_ensemble.fit_epochs(
+        for local_step in range(self.local_steps):
+            self.counter += 1
+
+            if local_step==0:
+                self.learners_ensemble.fit_saga_epoch(
                     iterator=self.train_iterator,
-                    n_epochs=self.local_steps,
+                    n_epoch=0,
+                    n_cluster_clients=n_cluster_clients,
                     weights=self.samples_weights
                 )
+            else:
+                batch=self.get_next_batch()
+                self.learners_ensemble.fit_saga_epoch(
+                    iterator=batch,
+                    n_epoch=local_step,
+                    n_cluster_clients=n_cluster_clients,
+                    weights=self.samples_weights
+                )
+
+        if self.learners_ensemble.adaptive_alpha:
+            self.learners_ensemble.update_alpha() 
+        partial_average([self.learners_ensemble.learners[0]], self.learners_ensemble.learners[1], self.learners_ensemble.alpha)
+
+        # TODO: add flag arguments to use `free_gradients`
+        # self.learners_ensemble.free_gradients()
+
+    def pre_write_logs(self):
+        if self.tune_locally:
+            self.update_tuned_learners()
+
+        if self.tune_locally:
+            train_loss, train_acc = self.tuned_learners_ensemble[0].evaluate_iterator(self.val_iterator)
+            test_loss, test_acc = self.tuned_learners_ensemble[0].evaluate_iterator(self.test_iterator)
+        else:
+            train_loss, train_acc = self.learners_ensemble[0].evaluate_iterator(self.val_iterator)
+            test_loss, test_acc = self.learners_ensemble[0].evaluate_iterator(self.test_iterator)
+           
+        self.logger.add_scalar("Global_Train/Loss", train_loss, self.counter)
+        self.logger.add_scalar("Global_Train/Metric", train_acc, self.counter)
+        self.logger.add_scalar("Global_Test/Loss", test_loss, self.counter)
+        self.logger.add_scalar("Global_Test/Metric", test_acc, self.counter)   
+
+        return train_loss, train_acc, test_loss, test_acc
 
     def write_logs(self):
         if self.tune_locally:
@@ -293,63 +331,6 @@ class AGFLClient(Client):
         self.logger.add_scalar("Global_Test/Metric", test_acc2, self.counter)   
 
         return train_loss, train_acc, test_loss, test_acc, train_loss2, train_acc2, test_loss2, test_acc2
-
-
-
-class AGFLSVRGClient(Client):
-    def __init__(
-            self,
-            learners_ensemble,
-            train_iterator,
-            val_iterator,
-            test_iterator,
-            logger,
-            local_steps,
-            tune_locally=False,
-            svrg_interval=5
-    ):
-        super().__init__(
-            learners_ensemble,
-            train_iterator,
-            val_iterator,
-            test_iterator,
-            logger,
-            local_steps,
-            tune_locally
-        )
-        self.svrg_interval = svrg_interval
-        self.reference_models = deepcopy(self.learners_ensemble)
-
-    def step(self, single_batch_flag=True, *args, **kwargs):
-        self.counter += 1
-        self.update_sample_weights()
-        self.update_learners_weights()
-
-        if self.counter % self.svrg_interval == 0:
-            self.update_reference_models()
-
-        if single_batch_flag:
-            batch = self.get_next_batch()
-            client_updates = \
-                self.learners_ensemble.fit_batch(
-                    batch=batch,
-                    weights=self.samples_weights,
-                    reference_models=self.reference_models
-                )
-        else:
-            client_updates = \
-                self.learners_ensemble.fit_epochs(
-                    iterator=self.train_iterator,
-                    n_epochs=self.local_steps,
-                    weights=self.samples_weights,
-                    reference_models=self.reference_models
-                )
-
-        return client_updates
-
-    def update_reference_models(self):
-        for i, learner in enumerate(self.learners_ensemble):
-            copy_model(source=learner.model, target=self.reference_models[i].model)
 
 
 class MixtureClient(Client):

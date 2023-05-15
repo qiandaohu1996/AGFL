@@ -353,6 +353,46 @@ def get_emnist():
     return emnist_data, emnist_targets
 
 
+def get_emnist2():
+    """
+    gets full (both train and test) EMNIST dataset inputs and labels;
+    the dataset should be first downloaded (see data/emnist/README.md)
+    :return:
+        emnist_data, emnist_targets
+    """
+    emnist_path = os.path.join("data", "emnist2", "raw_data")
+    assert os.path.isdir(emnist_path), "Download EMNIST dataset!!"
+
+    emnist_train =\
+        EMNIST(
+            root=emnist_path,
+            split="byclass",
+            download=True,
+            train=True
+        )
+
+    emnist_test =\
+        EMNIST(
+            root=emnist_path,
+            split="byclass",
+            download=True,
+            train=True
+        )
+
+    emnist_data =\
+        torch.cat([
+            emnist_train.data,
+            emnist_test.data
+        ])
+
+    emnist_targets =\
+        torch.cat([
+            emnist_train.targets,
+            emnist_test.targets
+        ])
+
+    return emnist_data, emnist_targets
+
 def get_cifar10():
     """
     gets full (both train and test) CIFAR10 dataset inputs and labels;

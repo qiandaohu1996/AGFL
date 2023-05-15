@@ -12,9 +12,11 @@ This file can also be imported as a module and contains the following function:
 from utils.utils import *
 from utils.constants import *
 from utils.args import *
+
+
 from torch.utils.tensorboard import SummaryWriter
 
-
+os.environ["CUDA_LAUNCH_BLOCKING"] = "1"
 def init_clients(args_, root_path, logs_root):
     """
     initialize clients from data folders
@@ -39,21 +41,39 @@ def init_clients(args_, root_path, logs_root):
 
         if train_iterator is None or test_iterator is None:
             continue
-
-        learners_ensemble =\
-            get_learners_ensemble(
-                n_learners=args_.n_learners,
-                name=args_.experiment,
-                device=args_.device,
-                optimizer_name=args_.optimizer,
-                scheduler_name=args_.lr_scheduler,
-                initial_lr=args_.lr,
-                input_dim=args_.input_dimension,
-                output_dim=args_.output_dimension,
-                n_rounds=args_.n_rounds,
-                seed=args_.seed,
-                mu=args_.mu
-            )
+        if args_.method in ['AGFL', 'APFL']:
+            learners_ensemble =\
+                 get_agfl_learners_ensemble(
+                    n_learners=args_.n_learners,
+                    name=args_.experiment,
+                    device=args_.device,
+                    optimizer_name=args_.optimizer,
+                    scheduler_name=args_.lr_scheduler,
+                    initial_lr=args_.lr,
+                    input_dim=args_.input_dimension,
+                    output_dim=args_.output_dimension,
+                    n_rounds=args_.n_rounds,
+                    seed=args_.seed,
+                    mu=args_.mu,
+                    lr_lambda=args_.lr_lambda,
+                    alpha=args_.alpha,
+                    adaptive_alpha=args_.adaptive_alpha
+                )
+        else:
+            learners_ensemble =\
+                get_learners_ensemble(
+                    n_learners=args_.n_learners,
+                    name=args_.experiment,
+                    device=args_.device,
+                    optimizer_name=args_.optimizer,
+                    scheduler_name=args_.lr_scheduler,
+                    initial_lr=args_.lr,
+                    input_dim=args_.input_dimension,
+                    output_dim=args_.output_dimension,
+                    n_rounds=args_.n_rounds,
+                    seed=args_.seed,
+                    mu=args_.mu,
+                )
 
         logs_path = os.path.join(logs_root, "task_{}".format(task_id))
         os.makedirs(logs_path, exist_ok=True)
@@ -137,7 +157,6 @@ def run_experiment(args_):
             lr=args_.lr,
             q=args_.q,
             mu=args_.mu,
-            alpha=args_.alpha,
             communication_probability=args_.communication_probability,
             sampling_rate=args_.sampling_rate,
             pre_rounds=args_.pre_rounds,
@@ -145,15 +164,15 @@ def run_experiment(args_):
             global_train_logger=global_train_logger,
             global_test_logger=global_test_logger,
             test_clients=test_clients,
+            single_batch_flag=args_.minibatch,
             verbose=args_.verbose,
             seed=args_.seed
         )
     torch.cuda.empty_cache()
-    print("Training..")
+    # print("Training..")
     pbar = tqdm(total=args_.n_rounds)
     current_round = 0
     while current_round <= args_.n_rounds:
-
         aggregator.mix()
 
         if aggregator.c_round != current_round:
