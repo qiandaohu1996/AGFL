@@ -1,7 +1,13 @@
+from copy import deepcopy
+import os
+from typing import List, OrderedDict, Tuple, Union
+import numpy as np
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-
+from learners.learner import Learner
+from utils.torch_utils import partial_average
+import traceback
 
 class LearnersEnsemble(object):
     """
@@ -39,12 +45,11 @@ class LearnersEnsemble(object):
         self.device = self.learners[0].device
         self.metric = self.learners[0].metric
 
-        def __setitem__(self, index, value):
-            if isinstance(value, learners):  # 假设Learner是可接受的类类型
-                self._learners[index] = value
-            else:
-                raise TypeError("Expected a Learner object.")
- 
+    def __setitem__(self, index, value):
+        if isinstance(value, Learner):  # 假设Learner是可接受的类类型
+            self.learners[index] = value
+        else:
+            raise TypeError("Expected a Learner object.")
 
     def optimizer_step(self):
         """
@@ -65,24 +70,14 @@ class LearnersEnsemble(object):
 
         """
         losses = []
-        for learner_id, learner in enumerate(self.learners):
+        for  learner in self.learners:
             loss = learner.compute_gradients_and_loss(batch, weights=weights)
             losses.append(loss)
 
         return losses
-
+    
     def fit_batch(self, batch, weights):
-        """
-        updates learners using  one batch.
 
-        :param batch: tuple of (x, y, indices)
-        :param weights: tensor with the learners_weights of each sample or None
-        :type weights: torch.tensor or None
-        :return:
-            client_updates (np.array, shape=(n_learners, model_dim)): the difference between the old parameter
-            and the updated parameters for each learner in the ensemble.
-
-        """
         client_updates = torch.zeros(len(self.learners), self.model_dim)
 
         for learner_id, learner in enumerate(self.learners):
@@ -91,12 +86,18 @@ class LearnersEnsemble(object):
                 learner.fit_batch(batch=batch, weights=weights[learner_id])
             else:
                 learner.fit_batch(batch=batch, weights=None)
-
             params = learner.get_param_tensor()
-
             client_updates[learner_id] = (params - old_params)
 
         return client_updates.cpu().numpy()
+ 
+    def fit_epoch(self, iterator, weights=None):
+ 
+        for learner_id, learner in enumerate(self.learners):
+            if weights is not None:
+                learner.fit_epoch(iterator, weights=weights[learner_id])
+            else:
+                learner.fit_epoch(iterator, weights=None)
 
     def fit_epochs(self, iterator, n_epochs, weights=None):
         """
@@ -195,7 +196,6 @@ class LearnersEnsemble(object):
     def free_memory(self):
         """
         free_memory: free the memory allocated by the model weights
-
         """
         for learner in self.learners:
             learner.free_memory()
@@ -203,7 +203,6 @@ class LearnersEnsemble(object):
     def free_gradients(self):
         """
         free memory allocated by gradients
-
         """
         for learner in self.learners:
             learner.free_gradients()
@@ -216,8 +215,85 @@ class LearnersEnsemble(object):
 
     def __getitem__(self, idx):
         return self.learners[idx]
+    
+class AGFLLearnersEnsemble(LearnersEnsemble):
 
+    def __init__(self, learners, learners_weights, alpha, adaptive_alpha, lr_lambda=0.05 ):
+        super().__init__(
+            learners=learners, 
+            learners_weights=learners_weights
+            )
+        
+        self.alpha=alpha
+        self.adaptive_alpha=adaptive_alpha
+        self.lr_lambda=lr_lambda
+        self.pre_model=None
+        self.gd_model=None
 
+    def update_alpha(self):
+        alpha_grad = 0
+        # for local_param, global_param in zip (self.learners[0].model.parameters(), self.learners[1].model.parameters()) :
+        for local_param, global_param in zip(
+            trainable_params(self.learners[0].model), trainable_params(self.learners[1].model)
+        ):
+            diff = (local_param.data - global_param.data).flatten()
+            grad = (
+                self.alpha * local_param.grad.data
+                + (1 - self.alpha) * global_param.grad.data
+            ).flatten()
+            alpha_grad += diff @ grad
+
+        alpha_grad += 0.02 * self.alpha
+        self.alpha -= self.lr_lambda * alpha_grad
+        self.alpha = np.clip(self.alpha.cpu().numpy(), 0.02, 0.98) 
+    
+    def fit_batch(self, batch, weights):
+
+        client_updates = torch.zeros(len(self.learners), self.model_dim)
+
+        for learner_id, learner in enumerate(self.learners):
+
+            print("learner",learner_id)
+            old_params = learner.get_param_tensor()
+            if weights is not None:
+                learner.fit_batch(batch=batch, weights=weights[learner_id])
+            else:
+                learner.fit_batch(batch=batch, weights=None)
+            params = learner.get_param_tensor()
+            client_updates[learner_id] = (params - old_params)
+
+        if self.adaptive_alpha:
+            self.update_alpha() 
+        partial_average([self.learners[0]], self.learners[1], self.alpha)
+
+        return client_updates.cpu().numpy()
+ 
+
+    # def fit_svrg_epoch(self, iterator, n_epoch, n_cluster_clients, weights=None):
+    #     # self.print_model_params(self.learners[0].model)
+    #     pre_mini_learner=deepcopy(self.learners[0])
+
+    #     lr=self.learners[0].get_optimizer_lr()
+
+    #     if n_epoch==0:    
+    #         # print(f"{n_epoch} fit_epoch")
+    #         self.fit_epoch(iterator=iterator,weights=weights)
+    #         cluster_learner=deepcopy(self.learners[0])
+        
+    #     else: 
+    #         # print(f"{n_epoch} fit_batch")
+    #         pre_mini_learner.fit_batch(iterator, weights=weights)
+    #         self.fit_batch(iterator, weights=weights)
+
+    #         #Backward
+    #         for param1, param2, param3 in zip(self.learners[0].model.parameters(), pre_mini_learner.model.parameters(), cluster_learner.model.parameters()): 
+    #             param1.data -= lr * (param1.grad.data - param2.grad.data + (1./n_cluster_clients) * param3.grad.data)
+
+    #     for learner in self.learners:
+    #         if learner.lr_scheduler is not None:
+    #             learner.lr_scheduler.step()
+
+    
 class LanguageModelingLearnersEnsemble(LearnersEnsemble):
     def evaluate_iterator(self, iterator):
         """
@@ -255,7 +331,6 @@ class LanguageModelingLearnersEnsemble(LearnersEnsemble):
 
             return global_loss / n_samples, global_metric / n_samples
 
-
 class LearnersEnsembleIterator(object):
     """
     LearnersEnsemble iterator class
@@ -282,4 +357,25 @@ class LearnersEnsembleIterator(object):
 
             return result
 
-        raise StopIteration
+        raise StopIteration  
+
+def trainable_params(
+    src: Union[OrderedDict[str, torch.Tensor], torch.nn.Module], requires_name=False
+) -> Union[List[torch.Tensor], Tuple[List[str], List[torch.Tensor]]]:
+    parameters = []
+    keys = []
+    if isinstance(src, OrderedDict):
+        for name, param in src.items():
+            if param.requires_grad:
+                parameters.append(param)
+                keys.append(name)
+    elif isinstance(src, torch.nn.Module):
+        for name, param in src.state_dict(keep_vars=True).items():
+            if param.requires_grad:
+                parameters.append(param)
+                keys.append(name)
+
+    if requires_name:
+        return keys, parameters
+    else:
+        return parameters

@@ -1,6 +1,6 @@
 import torch
 
-
+from utils.my_profiler import *
 class Learner:
     """
     Responsible of training and evaluating a (deep-)learning model
@@ -74,7 +74,12 @@ class Learner:
         self.optimizer.step()
         if self.lr_scheduler:
             self.lr_scheduler.step()
+            
+    def get_optimizer_lr(self):
 
+        learning_rate = self.optimizer.param_groups[0]['lr']
+        return learning_rate
+    
     def compute_gradients_and_loss(self, batch, weights=None):
         """
         compute the gradients and loss over one batch.
@@ -83,7 +88,7 @@ class Learner:
         :param weights: tensor with the learners_weights of each sample or None
         :type weights: torch.tensor or None
         :return:
-            loss
+            loss gradient
 
         """
         self.model.train()
@@ -91,87 +96,146 @@ class Learner:
         x, y, indices = batch
         x = x.to(self.device).type(torch.float32)
         y = y.to(self.device)
-
+        # print("sample number ", y.size() )
         if self.is_binary_classification:
             y = y.type(torch.float32).unsqueeze(1)
 
         self.optimizer.zero_grad()
-
         y_pred = self.model(x)
         loss_vec = self.criterion(y_pred, y)
-
         if weights is not None:
             weights = weights.to(self.device)
-            loss = (loss_vec.T @ weights[indices]) / loss_vec.size(0)
+            loss = (loss_vec * weights[indices]).sum() / loss_vec.size(0)
         else:
             loss = loss_vec.mean()
-
         loss.backward()
+        # torch.nn.utils.clip_grad_norm_(self.model.parameters(), 1.)
 
         return loss.detach()
+ 
 
     def fit_batch(self, batch, weights=None):
-        """
-        perform an optimizer step over one batch drawn from `iterator`
-
-        :param batch: tuple of (x, y, indices)
-        :param weights: tensor with the learners_weights of each sample or None
-        :type weights: torch.tensor or None
-        :return:
-            loss.detach()
-            metric.detach()
-
-        """
+        
         self.model.train()
-
-        x, y, indices = batch
-        x = x.to(self.device).type(torch.float32)
-        y = y.to(self.device)
-
-        if self.is_binary_classification:
-            y = y.type(torch.float32).unsqueeze(1)
-
         self.optimizer.zero_grad()
+        loss = self.compute_gradients_and_loss(batch, weights)
+        
+        # gradient_norm = torch.norm(torch.cat([param.grad.flatten() for param in self.model.parameters()]))
+        # 输出梯度范数的值
+        # print(f"Gradient Norm: {gradient_norm.item():.3f}",)
+        # torch.nn.utils.clip_grad_norm_(self.model.parameters(), 100.)
+        # gradient_norm = torch.norm(torch.cat([param.grad.flatten() for param in self.model.parameters()]))
+        # print(f"Gradient Norm: {gradient_norm.item():.3f}",)
+        self.optimizer_step()
 
-        y_pred = self.model(x)
-        loss_vec = self.criterion(y_pred, y)
-        metric = self.metric(y_pred, y) / len(y)
+        # x, y, _ = batch
+        # x = x.to(self.device).type(torch.float32)
+        # y = y.to(self.device)
+        # y_pred = self.model(x)
+        # metric = self.metric(y_pred, y) / len(y)
+        # print("batch dataset len ", len(y))
 
-        if weights is not None:
-            weights = weights.to(self.device)
+        # return loss, metric.detach()
+    
+    def pre_fit_batch(self, batch, weights=None):
 
-            # 或者使用 x.permute 反转张量的维度
-            loss = (loss_vec.permute(*torch.arange(loss_vec.ndim - 1, -1, -1)) @ weights[indices]) / loss_vec.size(0)
+        client_updates = torch.zeros(self.model_dim)
+        old_params = self.get_param_tensor()
+        # print(old_params[150:155])
+        # self.model.train()
 
-        else:
-            loss = loss_vec.mean()
+        self.compute_gradients_and_loss(batch, weights)
+        torch.nn.utils.clip_grad_norm_(self.model.parameters(), 100.)
+        self.optimizer_step()
 
-        loss.backward()
+        params = self.get_param_tensor()
+        client_updates = (params - old_params)
+        # print(params[150:155])
+        # print(client_updates[150:155])
 
-        self.optimizer.step()
-        if self.lr_scheduler:
-            self.lr_scheduler.step()
-
-        return loss.detach(), metric.detach()
-
+        return client_updates
+    
+    # @memory_profiler
     def fit_epoch(self, iterator, weights=None):
-        """
-        perform several optimizer steps on all batches drawn from `iterator`
+        client_updates = torch.zeros(self.model_dim)
+        old_params = self.get_param_tensor()
+        # print("old_params" ,old_params[150:155])
 
-        :param iterator:
-        :type iterator: torch.utils.data.DataLoader
-        :param weights: tensor with the learners_weights of each sample or None
-        :type weights: torch.tensor or None
-        :return:
-            loss.detach()
-            metric.detach()
-
-        """
         self.model.train()
 
         global_loss = 0.
         global_metric = 0.
         n_samples = 0
+
+        for x, y, indices in iterator:
+            x = x.to(self.device).type(torch.float32)
+            y = y.to(self.device)
+            n_samples += y.size(0)
+
+            if self.is_binary_classification:
+                y = y.type(torch.float32).unsqueeze(1)
+
+            self.optimizer.zero_grad()
+            y_pred = self.model(x)
+            loss_vec = self.criterion(y_pred, y)
+            if weights is not None:
+                weights = weights.to(self.device)
+                # loss_vec=loss_vec.unsqueeze(0)
+
+                # print("loss_vec size",loss_vec.size())
+                # print("weights[indices] size",weights[indices].size())
+                loss = (loss_vec * weights[indices]).sum() / loss_vec.size(0)
+            else:
+                loss = loss_vec.mean()
+            loss.backward() 
+
+            # gradient_norm = torch.norm(torch.cat([param.grad.flatten() for param in self.model.parameters()]))
+
+            # 输出梯度范数的值
+            # print(f"Gradient Norm:{gradient_norm.item():.3f}",)
+            torch.nn.utils.clip_grad_norm_(self.model.parameters(), 100.)
+            # gradient_norm = torch.norm(torch.cat([param.grad.flatten() for param in self.model.parameters()]))
+
+            # 输出梯度范数的值
+            # print(f"Gradient Norm:{gradient_norm.item():.3f}",)
+            
+            self.optimizer_step()
+            params = self.get_param_tensor()
+            client_updates = (params - old_params)
+            # print(params[150:155])
+            # print(client_updates[150:155])
+
+            global_loss += loss.detach() * loss_vec.size(0)
+            global_metric += self.metric(y_pred, y).detach()
+            # print("loss ", global_loss / n_samples)
+            
+        return global_loss / n_samples, global_metric / n_samples
+    
+    def fit_epochs(self, iterator, n_epochs, weights=None):
+ 
+        client_updates = torch.zeros(self.model_dim)
+        old_params = self.get_param_tensor()
+        # print("old_params ",old_params[150:155])
+
+        for step in range(n_epochs):
+            # print("n_epoch ",step)
+            self.fit_epoch(iterator, weights)
+
+        params = self.get_param_tensor()
+
+        client_updates = (params - old_params)  
+        # print("params ",params[150:155])
+        # print("client_updates ",client_updates[150:155])
+
+        return client_updates.cpu().numpy()
+    
+    def saga_fit_epoch(self, iterator, weights=None):
+
+        self.model.train()
+        client_updates = torch.zeros(self.model_dim)
+
+        n_samples = 0
+        old_params = self.get_param_tensor()
 
         for x, y, indices in iterator:
             x = x.to(self.device).type(torch.float32)
@@ -189,24 +253,22 @@ class Learner:
             loss_vec = self.criterion(y_pred, y)
             if weights is not None:
                 weights = weights.to(self.device)
+                loss = (loss_vec * weights[indices]).sum() / loss_vec.size(0)
                 # loss = (loss_vec.T @ weights[indices]) / loss_vec.size(0)
-                # # 使用 x.mT 转置批量矩阵
-                # loss = (loss_vec.mT @ weights[indices]) / loss_vec.size(0)
-
-                # # 或者使用 x.permute 反转张量的维度
-                loss = (loss_vec.permute(*torch.arange(loss_vec.ndim - 1, -1, -1)) @ weights[indices]) / loss_vec.size(0)
 
             else:
                 loss = loss_vec.mean()
             loss.backward()
+            # client_grad=self.model.grad
+            torch.nn.utils.clip_grad_norm_(self.model.parameters(), 100.)
 
-            self.optimizer.step()
+            self.optimizer_step()
+            params = self.get_param_tensor()
 
-            global_loss += loss.detach() * loss_vec.size(0)
-            global_metric += self.metric(y_pred, y).detach()
-
-        return global_loss / n_samples, global_metric / n_samples
-
+            client_updates = (params - old_params)
+            
+        return client_updates.cpu().numpy()
+    
     def gather_losses(self, iterator):
         """
         gathers losses for all elements of iterator
@@ -233,7 +295,7 @@ class Learner:
                 all_losses[indices] = self.criterion(y_pred, y).squeeze()
 
         return all_losses
-
+    
     def evaluate_iterator(self, iterator):
         """
         evaluate learner on `iterator`
@@ -249,11 +311,12 @@ class Learner:
         global_loss = 0.
         global_metric = 0.
         n_samples = 0
+        # len_iter=more_itertools.ilen(iterator)
+        # if len_iter<64:
 
         for x, y, _ in iterator:
             x = x.to(self.device).type(torch.float32)
             y = y.to(self.device)
-
             if self.is_binary_classification:
                 y = y.type(torch.float32).unsqueeze(1)
 
@@ -266,27 +329,8 @@ class Learner:
             n_samples += y.size(0)
 
         return global_loss / n_samples, global_metric / n_samples
-
-    def fit_epochs(self, iterator, n_epochs, weights=None):
-        """
-        perform multiple training epochs
-
-        :param iterator:
-        :type iterator: torch.utils.data.DataLoader
-        :param n_epochs: number of successive batches
-        :type n_epochs: int
-        :param weights: tensor with the learners_weights of each sample or None
-        :type weights: torch.tensor or None
-        :return:
-            None
-
-        """
-        for step in range(n_epochs):
-            self.fit_epoch(iterator, weights)
-
-            if self.lr_scheduler is not None:
-                self.lr_scheduler.step()
-
+    
+    
     def get_param_tensor(self):
         """
         get `model` parameters as a unique flattened tensor
@@ -362,7 +406,7 @@ class LanguageModelingLearner(Learner):
 
             loss.backward()
 
-            self.optimizer.step()
+            self.optimizer_step()
 
             global_loss += loss.detach() * loss_vec.size(0) / chunk_len
             global_metric += self.metric(y_pred, y).detach() / chunk_len
@@ -400,18 +444,7 @@ class LanguageModelingLearner(Learner):
 
         return global_loss / n_samples, global_metric / n_samples
 
-    def compute_gradients_and_loss(self, batch, weights=None):
-        """
-        compute the gradients and loss over one batch.
-
-        :param batch: tuple of (x, y, indices)
-        :param weights: tensor with the learners_weights of each sample or None
-        :type weights: torch.tensor or None
-        :return:
-            loss
-
-        """
-        raise NotImplementedError
+ 
 
     def gather_losses(self, iterator):
         """
