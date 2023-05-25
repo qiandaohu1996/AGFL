@@ -1,9 +1,12 @@
+import numpy as np
 import torch.nn.functional as F
 
 from copy import deepcopy
-from learners.learners_ensemble import LearnersEnsemble
 from utils.torch_utils import *
-# from utils.utils import *
+from utils.constants import *
+
+from utils.datastore import *
+
 
 class Client(object):
     r"""Implements one clients
@@ -42,6 +45,7 @@ class Client(object):
     update_learners_weights
 
     """
+
     def __init__(
             self,
             learners_ensemble,
@@ -54,7 +58,7 @@ class Client(object):
     ):
 
         self.learners_ensemble = learners_ensemble
-  
+
         self.n_learners = len(self.learners_ensemble)
         self.tune_locally = tune_locally
 
@@ -74,7 +78,8 @@ class Client(object):
         self.n_train_samples = len(self.train_iterator.dataset)
         self.n_test_samples = len(self.test_iterator.dataset)
 
-        self.samples_weights = torch.ones(self.n_learners, self.n_train_samples) / self.n_learners
+        self.samples_weights = torch.ones(
+            self.n_learners, self.n_train_samples) / self.n_learners
 
         self.local_steps = local_steps
 
@@ -91,12 +96,6 @@ class Client(object):
             # 处理最后一批次的情况
             batch = None
         return batch
-    
-    def fit_all_batch(self, iterator, weights=None):
-
-        for batch in iterator:
-            batch = self.get_next_batch()
-            self.fit_batch(batch, weights)
 
     def step(self, single_batch_flag=False, *args, **kwargs):
         """
@@ -125,30 +124,36 @@ class Client(object):
                     n_epochs=self.local_steps,
                     weights=self.samples_weights
                 )
-        
+
         # TODO: add flag arguments to use `free_gradients`
         # self.learners_ensemble.free_gradients()
 
         return client_updates
 
-   
 
-    def write_logs(self):
+    def _write_logs(self, logger, iterator, log_type):
         if self.tune_locally:
             self.update_tuned_learners()
 
-        if self.tune_locally:
-            train_loss, train_acc = self.tuned_learners_ensemble.evaluate_iterator(self.val_iterator)
-            test_loss, test_acc = self.tuned_learners_ensemble.evaluate_iterator(self.test_iterator)
-        else:
-            train_loss, train_acc = self.learners_ensemble.evaluate_iterator(self.val_iterator)
-            test_loss, test_acc = self.learners_ensemble.evaluate_iterator(self.test_iterator)
+        learners_ensemble = self.tuned_learners_ensemble if self.tune_locally else self.learners_ensemble
 
-        self.logger.add_scalar("Train/Loss", train_loss, self.counter)
-        self.logger.add_scalar("Train/Metric", train_acc, self.counter)
-        self.logger.add_scalar("Test/Loss", test_loss, self.counter)
-        self.logger.add_scalar("Test/Metric", test_acc, self.counter)
+        loss, acc = learners_ensemble.evaluate_iterator(iterator)
 
+        logger.add_scalar(f"{log_type}/Loss", loss, self.counter)
+        logger.add_scalar(f"{log_type}/Metric", acc, self.counter)
+
+        return loss, acc
+
+    def write_train_logs(self):
+        return self._write_logs(self.logger, self.val_iterator, "Train")
+
+    def write_test_logs(self):
+        return self._write_logs(self.logger, self.test_iterator, "Test")
+
+    def write_logs(self):
+        train_loss, train_acc = self.write_train_logs()
+        test_loss, test_acc = self.write_test_logs()
+        
         return train_loss, train_acc, test_loss, test_acc
 
     def update_sample_weights(self):
@@ -162,10 +167,14 @@ class Client(object):
             return
 
         for learner_id, learner in enumerate(self.tuned_learners_ensemble):
-            copy_model(source=self.learners_ensemble[learner_id].model, target=learner.model)
-            learner.fit_epochs(self.train_iterator, self.local_steps, weights=self.samples_weights[learner_id])
- 
+            copy_model(
+                source=self.learners_ensemble[learner_id].model, target=learner.model)
+            learner.fit_epochs(self.train_iterator, self.local_steps,
+                               weights=self.samples_weights[learner_id])
+
+
 class AGFLClient(Client):
+
     def __init__(
             self,
             learners_ensemble,
@@ -177,7 +186,7 @@ class AGFLClient(Client):
             tune_locally=False,
             # svrg_interval=5
     ):
-        super(AGFLClient,self).__init__(
+        super(AGFLClient, self).__init__(
             learners_ensemble=learners_ensemble,
             train_iterator=train_iterator,
             val_iterator=val_iterator,
@@ -187,7 +196,7 @@ class AGFLClient(Client):
             tune_locally=tune_locally
         )
         self.counter = 0
-        # self.reference_model = deepcopy(self.learners_ensemble[1])
+
     def pre_step(self, single_batch_flag=False, *args, **kwargs):
         """
         perform on step for the client
@@ -198,150 +207,301 @@ class AGFLClient(Client):
         """
         self.counter += 1
         self.update_sample_weights()
-        self.update_learners_weights()
-        
-
-        # print("self.samples_weights.size():",self.samples_weights.size())
-        if single_batch_flag:
-            batch = self.get_next_batch()
-            client_updates = \
-            self.learners_ensemble[0].pre_fit_batch(batch=batch,
-                                    weights=self.samples_weights[0]
-                                    ) 
-        else:
-            client_updates = \
-            self.learners_ensemble[0].pre_fit_epochs(
-                                        iterator=self.train_iterator,
-                                        n_epochs=self.local_steps,
-                                        weights=self.samples_weights[0]
-                                        ) 
-
-        # TODO: add flag arguments to use `free_gradients`
-        # self.learners_ensemble.free_gradients()
-
-        return client_updates
-    
-    
-    def step(self, single_batch_flag=False, *args, **kwargs):
-        """
-        perform on step for the client
-
-        :param single_batch_flag: if true, the client only uses one batch to perform the update
-        :return
-            clients_updates: ()
-        """
-        self.counter += 1
-        self.update_sample_weights()
-        self.update_learners_weights()
-
-        # if self.counter % self.svrg_interval == 0:
-        #     self.update_reference_models()
+        # self.update_learners_weights()
 
         if single_batch_flag:
             batch = self.get_next_batch()
             client_updates = \
-                self.learners_ensemble.fit_batch(
+                self.learners_ensemble[0].pre_fit_batch(
                     batch=batch,
-                    weights=self.samples_weights
+                    weights=self.samples_weights[0]*2
                 )
         else:
             client_updates = \
-                self.learners_ensemble.fit_epochs(
+                self.learners_ensemble[0].fit_epochs(
                     iterator=self.train_iterator,
                     n_epochs=self.local_steps,
-                    weights=self.samples_weights
+                    weights=self.samples_weights[0]*2
                 )
+
         # TODO: add flag arguments to use `free_gradients`
         # self.learners_ensemble.free_gradients()
 
         return client_updates
-    
-    def saga_step(self, n_cluster_clients, *args, **kwargs):
- 
+
+    def svrg_step(self, client_weight, *args, **kwargs):
+
+        client_learner=self.learners_ensemble.learners[0]
+        global_learner=self.learners_ensemble.learners[1]
+
+        pre_mini_learner = deepcopy(client_learner)
+        cluster_learner = deepcopy(client_learner)
+        
         self.update_sample_weights()
-        self.update_learners_weights()
 
-        for local_step in range(self.local_steps):
+        global_learner.fit_epoch(
+                    iterator=self.train_iterator, 
+                    weights=self.samples_weights[1]*2
+                    )
+
+        lr = client_learner.get_optimizer_lr()
+
+        print("lr:", lr)
+        for lcoal_step in range(self.local_steps):
             self.counter += 1
-
-            if local_step==0:
-                self.learners_ensemble.fit_saga_epoch(
-                    iterator=self.train_iterator,
-                    n_epoch=0,
-                    n_cluster_clients=n_cluster_clients,
-                    weights=self.samples_weights
-                )
+            if lcoal_step == 0:
+                cluster_learner.fit_epoch(
+                    iterator=self.train_iterator, 
+                    weights=self.samples_weights[0]*2
+                    )
             else:
-                batch=self.get_next_batch()
-                self.learners_ensemble.fit_saga_epoch(
-                    iterator=batch,
-                    n_epoch=local_step,
-                    n_cluster_clients=n_cluster_clients,
-                    weights=self.samples_weights
-                )
+                batch = self.get_next_batch()
+                # print("lcoal_step ", f"{lcoal_step}")
+                client_learner.fit_batch(
+                    batch=batch, 
+                    weights=self.samples_weights[0]*2
+                    )
+                pre_mini_learner.fit_batch(
+                    batch=batch, 
+                    weights=self.samples_weights[0]*2
+                    )
+                for param, param_prev, param_gd in zip(client_learner.model.parameters(), pre_mini_learner.model.parameters(), cluster_learner.model.parameters()):
+                    param.data -= lr * (param_prev.grad.data - param_prev.grad.data + client_weight * param_gd.grad.data)
 
         if self.learners_ensemble.adaptive_alpha:
-            self.learners_ensemble.update_alpha() 
-        partial_average([self.learners_ensemble.learners[0]], self.learners_ensemble.learners[1], self.learners_ensemble.alpha)
+            self.learners_ensemble.update_alpha()
+            partial_average([client_learner],
+                    global_learner, self.learners_ensemble.alpha)
+
+    def saga_step(self, client_weight, *args, **kwargs):
+
+        client_learner=self.learners_ensemble.learners[0]
+        global_learner=self.learners_ensemble.learners[1]
+        
+        pre_mini_model = init_nn(deepcopy(client_learner.model))
+        mean_model = init_nn(deepcopy(client_learner.model))
+        
+        self.update_sample_weights()
+
+        self.fit_epoch(
+                    iterator=self.train_iterator, 
+                    weights=self.samples_weights
+                    )
+
+        lr = client_learner.get_optimizer_lr()
+
+        print("lr:", lr)
+
+        for batch in self.train_iterator:
+            self.counter += 1
+ 
+            # print("lcoal_step ", f"{lcoal_step}")
+
+            client_learner.fit_batch(batch, weights=self.samples_weights[0]*2)
+            for param, param_pre, param_mean in zip(client_learner.model.parameters(), pre_mini_model.parameters(), mean_model.parameters()):
+                saga_update = param.grad.data - param_pre.data + param_mean.data
+                param_mean.data += client_weight * (param.grad.data - param_pre.data)  # update mean
+                param_pre.data = param.grad.data.clone()  # update previous grad
+                param.data.sub_(saga_update * lr)
+
+        if self.learners_ensemble.adaptive_alpha:
+            self.learners_ensemble.update_alpha()
+            partial_average([client_learner],
+                        global_learner, self.learners_ensemble.alpha)
 
         # TODO: add flag arguments to use `free_gradients`
         # self.learners_ensemble.free_gradients()
 
-    def pre_write_logs(self):
+
+
+
+    def pre_write_logs(self, dataset_type):
+        if self.tune_locally:
+            self.update_tuned_learners()
+            learner = self.tuned_learners_ensemble[0]
+        else:
+            learner = self.learners_ensemble[0]
+
+        if dataset_type == "train":
+            iterator = self.val_iterator
+            loss_key = "Train/Loss"
+            metric_key = "Train/Metric"
+        elif dataset_type == "test":
+            iterator = self.test_iterator
+            loss_key = "Test/Loss"
+            metric_key = "Test/Metric"
+
+        loss, acc = learner.evaluate_iterator(iterator)
+
+        self.logger.add_scalar(loss_key, loss, self.counter)
+        self.logger.add_scalar(metric_key, acc, self.counter)
+
+        return loss, acc
+
+    def write_train_logs(self):
         if self.tune_locally:
             self.update_tuned_learners()
 
         if self.tune_locally:
-            train_loss, train_acc = self.tuned_learners_ensemble[0].evaluate_iterator(self.val_iterator)
-            test_loss, test_acc = self.tuned_learners_ensemble[0].evaluate_iterator(self.test_iterator)
+            learner1 = self.tuned_learners_ensemble[0]
+            learner2 = self.tuned_learners_ensemble[1]
         else:
-            train_loss, train_acc = self.learners_ensemble[0].evaluate_iterator(self.val_iterator)
-            test_loss, test_acc = self.learners_ensemble[0].evaluate_iterator(self.test_iterator)
-           
-        self.logger.add_scalar("Global_Train/Loss", train_loss, self.counter)
-        self.logger.add_scalar("Global_Train/Metric", train_acc, self.counter)
-        self.logger.add_scalar("Global_Test/Loss", test_loss, self.counter)
-        self.logger.add_scalar("Global_Test/Metric", test_acc, self.counter)   
+            learner1 = self.learners_ensemble[0]
+            learner2 = self.learners_ensemble[1]
 
-        return train_loss, train_acc, test_loss, test_acc
+        train_loss, train_acc = learner1.evaluate_iterator(self.val_iterator)
+        train_loss2, train_acc2 = learner2.evaluate_iterator(self.val_iterator)
 
-    def write_logs(self):
+        metrics = [
+            ("Train/Loss", train_loss),
+            ("Train/Metric", train_acc),
+            ("Global_Train/Loss", train_loss2),
+            ("Global_Train/Metric", train_acc2),
+        ]
+
+        for metric_name, metric_value in metrics:
+            self.logger.add_scalar(metric_name, metric_value, self.counter)
+
+        return train_loss, train_acc, train_loss2, train_acc2
+
+    def write_test_logs(self):
         if self.tune_locally:
             self.update_tuned_learners()
 
         if self.tune_locally:
-            train_loss, train_acc = self.tuned_learners_ensemble[0].evaluate_iterator(self.val_iterator)
-            test_loss, test_acc = self.tuned_learners_ensemble[0].evaluate_iterator(self.test_iterator)
-            train_loss2, train_acc2 = self.tuned_learners_ensemble[1].evaluate_iterator(self.val_iterator)
-            test_loss2, test_acc2 = self.tuned_learners_ensemble[1].evaluate_iterator(self.test_iterator)
+            learner = self.tuned_learners_ensemble[0]
         else:
-            train_loss, train_acc = self.learners_ensemble[0].evaluate_iterator(self.val_iterator)
-            test_loss, test_acc = self.learners_ensemble[0].evaluate_iterator(self.test_iterator)
-            train_loss2, train_acc2 = self.learners_ensemble[1].evaluate_iterator(self.val_iterator)
-            test_loss2, test_acc2 = self.learners_ensemble[1].evaluate_iterator(self.test_iterator)
+            learner = self.learners_ensemble[0]
 
-        self.logger.add_scalar("Cluster_Train/Loss", train_loss, self.counter)
-        self.logger.add_scalar("Cluster_Train/Metric", train_acc, self.counter)
-        self.logger.add_scalar("Cluster_Test/Loss", test_loss, self.counter)
-        self.logger.add_scalar("Cluster_Test/Metric", test_acc, self.counter)    
+        test_loss, test_acc = learner.evaluate_iterator(self.test_iterator)
 
-        self.logger.add_scalar("Global_Train/Loss", train_loss2, self.counter)
-        self.logger.add_scalar("Global_Train/Metric", train_acc2, self.counter)
-        self.logger.add_scalar("Global_Test/Loss", test_loss2, self.counter)
-        self.logger.add_scalar("Global_Test/Metric", test_acc2, self.counter)   
+        metrics = [
+            ("Global_Test/Loss", test_loss),
+            ("Global_Test/Metric", test_acc)
+        ]
 
-        return train_loss, train_acc, test_loss, test_acc, train_loss2, train_acc2, test_loss2, test_acc2
+        for metric_name, metric_value in metrics:
+            self.logger.add_scalar(metric_name, metric_value, self.counter)
+
+        return test_loss, test_acc
+
+class FedRepClient(Client):
+    """
+    Client used to implement
+        "Exploiting Shared Representations for Personalized FederatedLearning"__(https://arxiv.org/pdf/2102.07078.pdf)
+
+    """
+    def __init__(
+            self,
+            learner,
+            train_iterator,
+            val_iterator,
+            test_iterator,
+            logger,
+            local_steps,
+            save_path=None,
+            id_=None,
+            *args,
+            **kwargs
+    ):
+        super(FedRepClient, self).__init__(
+            learner=learner,
+            train_iterator=train_iterator,
+            val_iterator=val_iterator,
+            test_iterator=test_iterator,
+            logger=logger,
+            local_steps=local_steps,
+            save_path=save_path,
+            id_=id_,
+            *args,
+            **kwargs
+        )
+        self.head = deepcopy(self.learner.get_head())
+
+    def step(self):
+        head = self.learner.get_head()
+        copy_model(source=self.head, target=head)
+
+        self.learner.freeze_body()
+
+        # train the head
+        self.learner.fit_epochs(
+            iterator=self.train_iterator,
+            n_epochs=LOCAL_HEAD_UPDATES,
+        )
+        self.head = deepcopy(self.learner.get_head())
+
+        # train the body with fixed head
+        self.learner.unfreeze_body()
+
+        head = self.learner.get_head()
+        client_updates = \
+            self.learner.fit_epochs(
+                iterator=self.train_iterator,
+                n_epochs=self.local_steps,
+                frozen_modules=[head]
+            )
 
 
 class MixtureClient(Client):
     def update_sample_weights(self):
         all_losses = self.learners_ensemble.gather_losses(self.val_iterator)
-        self.samples_weights = F.softmax((torch.log(self.learners_ensemble.learners_weights) - all_losses.T), dim=1).T
+        print("all_losses",all_losses[:,:5]) 
+        # [3,49]
+        # print("all_losses ",self.learners_ensemble.learners_weights)
+        print("learners_weights ",self.learners_ensemble.learners_weights)
+        # [3]
+        print("samples_weights size",self.samples_weights.size())
+        # [3,49]
+        
+        self.samples_weights = F.softmax(
+            (torch.log(self.learners_ensemble.learners_weights) - all_losses.T), dim=1).T
+        print("samples_weights",self.samples_weights.size())
+        # print("samples_weights",self.learners_ensemble.learners_weights)
+        torch.cuda.empty_cache()
 
     def update_learners_weights(self):
-        self.learners_ensemble.learners_weights = self.samples_weights.mean(dim=1)
+        self.learners_ensemble.learners_weights = self.samples_weights.mean(
+            dim=1)
+        print("learners_weights",self.learners_ensemble.learners_weights)
+        torch.cuda.empty_cache()
 
 
+class FuzzyClient(Client): 
+    
+
+    def update_membership_loss(self,membership_mat, losses, client_id):
+
+        membership_mat[client_id]=F.softmax(losses.T,dim=1).T.mean(dim=1)
+    # @calc_exec_time(calc_time=True)
+    # @memory_profiler
+    def update_membership_mat(self, membership_mat, cluster_params, client_params, client_id,fuzzy_m):
+        p = float(2 / (fuzzy_m - 1))
+        n_clusters = cluster_params.size(0)
+   
+        distances = torch.zeros(n_clusters, device=client_params.device)
+        with torch.no_grad():
+            for i in range(n_clusters):
+                diff = client_params - cluster_params[i]
+                distances[i]= torch.norm(diff) 
+
+            print("distances",distances)
+            distances =distances-distances.mean()
+            print("distances after mean",distances)
+
+            # membership_mat[client_id]=F.softmax(distances,dim=0).T
+
+            for cluster_id in range(n_clusters):
+                den = 0.0
+                for j in range(n_clusters):
+                    den += (distances[cluster_id] / distances[j])  ** p
+                    if den>1.e+10: den=1.e+10
+                print("den ", den)
+                membership_mat[client_id, cluster_id] = 1.0 / den
+                torch.cuda.empty_cache()
+
+        return membership_mat
+    
 class AgnosticFLClient(Client):
     def __init__(
             self,
@@ -380,6 +540,7 @@ class FFLClient(Client):
      `FAIR RESOURCE ALLOCATION IN FEDERATED LEARNING`__(https://arxiv.org/pdf/1905.10497.pdf)
 
     """
+
     def __init__(
             self,
             learners_ensemble,
@@ -409,7 +570,8 @@ class FFLClient(Client):
         hs = 0
         for learner in self.learners_ensemble:
             initial_state_dict = self.learners_ensemble[0].model.state_dict()
-            learner.fit_epochs(iterator=self.train_iterator, n_epochs=self.local_steps)
+            learner.fit_epochs(iterator=self.train_iterator,
+                               n_epochs=self.local_steps)
 
             client_loss, _ = learner.evaluate_iterator(self.train_iterator)
             client_loss = torch.tensor(client_loss)
@@ -422,8 +584,296 @@ class FFLClient(Client):
                 coeff=torch.pow(client_loss, self.q) / lr
             )
 
-            hs = self.q * torch.pow(client_loss, self.q-1) * torch.pow(torch.linalg.norm(learner.get_grad_tensor()), 2)
+            hs = self.q * torch.pow(client_loss, self.q-1) * \
+                torch.pow(torch.linalg.norm(learner.get_grad_tensor()), 2)
             hs /= torch.pow(torch.pow(client_loss, self.q), 2)
             hs += torch.pow(client_loss, self.q) / lr
 
         return hs / len(self.learners_ensemble)
+
+
+
+class KNNPerClient(Client):
+    """
+
+    Attributes
+    ----------
+    model:
+    features_dimension:
+    num_classes:
+    train_loader:
+    test_loader:
+    n_train_samples:
+    n_test_samples:
+    local_steps:
+    logger:
+    binary_classification_flag:
+    counter:
+    capacity: datastore capacity of the client
+    strategy: strategy to select samples to keep on the datastore
+    rng (numpy.random._generator.Generator):
+    datastore (datastore.DataStore):
+    datastore_flag (bool):
+    features_dimension (int):
+    num_classes (int):
+    train_features: (n_train_samples x features_dimension)
+    test_features: (n_train_samples x features_dimension)
+    features_flag (bool):
+    model_outputs: (n_test_samples x num_classes)
+    model_outputs_flag (bool):
+    knn_outputs:
+    knn_outputs_flag (bool)
+    interpolate_logits (bool): if selected logits are interpolated instead of probabilities
+
+    Methods
+    -------
+    __init__
+
+    build
+
+    compute_features_and_model_outputs
+
+    build_datastore
+
+    gather_knn_outputs
+
+    evaluate
+
+    clear_datastore
+
+    """
+
+    def __init__(
+            self,
+            learner,
+            train_iterator,
+            val_iterator,
+            test_iterator,
+            logger,
+            local_steps,
+            k,
+            interpolate_logits,
+            features_dimension,
+            num_classes,
+            capacity,
+            strategy,
+            rng,
+            *args,
+            **kwargs
+    ):
+        """
+
+        :param learner:
+        :param train_iterator:
+        :param val_iterator:
+        :param test_iterator:
+        :param logger:
+        :param local_steps:
+        :param k:
+        :param features_dimension:
+        :param num_classes:
+        :param capacity:
+        :param strategy:
+        :param rng:
+
+        """
+        super(KNNPerClient, self).__init__(
+            learner=learner,
+            train_iterator=train_iterator,
+            val_iterator=val_iterator,
+            test_iterator=test_iterator,
+            logger=logger,
+            local_steps=local_steps,
+            *args,
+            **kwargs
+        )
+
+        self.k = k
+        self.interpolate_logits = interpolate_logits
+
+        self.model = self.learner.model
+        self.features_dimension = features_dimension
+        self.num_classes = num_classes
+
+        self.train_iterator = train_iterator
+        self.test_iterator = test_iterator
+
+        self.n_train_samples = len(train_iterator.dataset)
+        self.n_test_samples = len(test_iterator.dataset)
+
+        self.capacity = capacity
+        self.strategy = strategy
+        self.rng = rng
+        self.device = self.learner.device
+
+        self.model = self.model.to(self.device)
+        self.model.eval()
+
+        self.datastore = DataStore(self.capacity, self.strategy, self.features_dimension, self.rng)
+        self.datastore_flag = False
+
+        self.train_features = np.zeros(shape=(self.n_train_samples, self.features_dimension), dtype=np.float32)
+        self.train_labels = np.zeros(shape=self.n_train_samples, dtype=np.float32)
+        self.test_features = np.zeros(shape=(self.n_test_samples, self.features_dimension), dtype=np.float32)
+        self.test_labels = np.zeros(shape=self.n_test_samples, dtype=np.float32)
+        self.features_flag = False
+
+        self.train_model_outputs = np.zeros(shape=(self.n_train_samples, self.num_classes), dtype=np.float32)
+        self.train_model_outputs_flag = False
+
+        self.test_model_outputs = np.zeros(shape=(self.n_test_samples, self.num_classes), dtype=np.float32)
+        self.test_model_outputs_flag = False
+
+        self.train_knn_outputs = np.zeros(shape=(self.n_train_samples, self.num_classes), dtype=np.float32)
+        self.train_knn_outputs_flag = False
+
+        self.test_knn_outputs = np.zeros(shape=(self.n_test_samples, self.num_classes), dtype=np.float32)
+        self.test_knn_outputs_flag = False
+
+    @property
+    def k(self):
+        return self.__k
+
+    @k.setter
+    def k(self, k):
+        self.__k = int(k)
+
+    @property
+    def capacity(self):
+        return self.__capacity
+
+    @capacity.setter
+    def capacity(self, capacity):
+        if 0 <= capacity <= 1 and isinstance(capacity, float):
+            capacity = int(capacity * self.n_train_samples)
+        else:
+            capacity = int(capacity)
+
+        if capacity < 0:
+            capacity = self.n_train_samples
+
+        self.__capacity = capacity
+
+    def step(self):
+        pass
+
+    def compute_features_and_model_outputs(self):
+        """
+        extract features from `train_iterator` and `test_iterator` .
+        and computes the predictions of the base model (i.e., `self.model`) over `test_iterator`.
+
+        """
+        self.features_flag = True
+        self.train_model_outputs_flag = True
+        self.test_model_outputs_flag = True
+
+        self.train_features, self.train_model_outputs, self.train_labels = \
+            self.learner.compute_embeddings_and_outputs(
+                iterator=self.train_iterator,
+                embedding_dim=self.features_dimension,
+                n_classes=self.num_classes,
+                apply_softmax=(not self.interpolate_logits)
+            )
+
+        self.test_features, self.test_model_outputs, self.test_labels = \
+            self.learner.compute_embeddings_and_outputs(
+                iterator=self.test_iterator,
+                embedding_dim=self.features_dimension,
+                n_classes=self.num_classes,
+                apply_softmax=(not self.interpolate_logits)
+            )
+
+    def build_datastore(self):
+        assert self.features_flag, "Features should be computed before building datastore!"
+        self.datastore_flag = True
+
+        self.datastore.build(self.train_features, self.train_labels)
+
+    def gather_knn_outputs(self, mode="test", scale=1.):
+        """
+        computes the k-NN predictions
+
+        :param mode: possible are "train" and "test", default is "test"
+        :param scale: scale of the gaussian kernel, default is 1.0
+        """
+        if self.capacity <= 0:
+            warnings.warn("trying to gather knn outputs with empty datastore", RuntimeWarning)
+            return
+
+        assert self.features_flag, "Features should be computed before building datastore!"
+        assert self.datastore_flag, "Should build datastore before computing knn outputs!"
+
+        if mode == "train":
+            features = self.train_features
+            self.train_knn_outputs_flag = True
+        else:
+            features = self.test_features
+            self.test_knn_outputs_flag = True
+
+        distances, indices = self.datastore.index.search(features, self.k)
+        similarities = np.exp(-distances / (self.features_dimension * scale))
+        neighbors_labels = self.datastore.labels[indices]
+
+        masks = np.zeros(((self.num_classes,) + similarities.shape))
+        for class_id in range(self.num_classes):
+            masks[class_id] = neighbors_labels == class_id
+
+        outputs = (similarities * masks).sum(axis=2) / similarities.sum(axis=1)
+
+        if mode == "train":
+            self.train_knn_outputs = outputs.T
+        else:
+            self.test_knn_outputs = outputs.T
+
+    def evaluate(self, weight, mode="test"):
+        """
+        evaluates the client for a given weight parameter
+
+        :param weight: float in [0, 1]
+        :param mode: possible are "train" and "test", default is "test"
+
+        :return:
+            accuracy score
+
+        """
+        if mode == "train":
+            flag = self.train_knn_outputs_flag
+            knn_outputs = self.train_knn_outputs
+            model_outputs = self.train_model_outputs
+            labels = self.train_labels
+
+        else:
+            flag = self.test_knn_outputs_flag
+            knn_outputs = self.test_knn_outputs
+            model_outputs = self.test_model_outputs
+            labels = self.test_labels
+
+        if flag:
+            outputs = weight * knn_outputs + (1 - weight) * model_outputs
+        else:
+            warnings.warn("evaluation is done only with model outputs, datastore is empty", RuntimeWarning)
+            outputs = model_outputs
+
+        predictions = np.argmax(outputs, axis=1)
+
+        correct = (labels == predictions).sum()
+        total = len(labels)
+
+        if total == 0:
+            acc = 1
+        else:
+            acc = correct / total
+
+        return acc
+
+    def clear_datastore(self):
+        """
+        clears `datastore`
+
+        """
+        self.datastore.clear()
+        self.datastore.capacity = self.capacity
+
+        self.datastore_flag = False
+        self.train_knn_outputs_flag = False
+        self.test_knn_outputs_flag = False
