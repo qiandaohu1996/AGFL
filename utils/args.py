@@ -34,7 +34,7 @@ def parse_args(args_list=None):
         'method',
         help='the method to be used;'
              ' possible are `FedAvg`, `FedEM`, `local`, `FedProx`, `L2SGD`,'
-             ' `pFedMe`, `AFL`,`APFL`, `FFL` and `clustered`;',
+             ' `pFedMe`, `AFL`,`APFL`, `AGFL`, `FuzzyFL`, `FFL` and `clustered`;',
         type=str
     )
     parser.add_argument(
@@ -60,6 +60,12 @@ def parse_args(args_list=None):
         help='weighted mixture coefficients of global and local models; default is 0.2',
         type=float,
         default=0.2
+    )
+    parser.add_argument(
+        '--fuzzy_m',
+        help=' default is 2.0',
+        type=float,
+        default=1.1
     )
     parser.add_argument(
         '--adaptive_alpha',
@@ -94,7 +100,7 @@ def parse_args(args_list=None):
         '--n_rounds',
         help='number of communication rounds; default is 1',
         type=int,
-        default=1
+        default=200
     )
     parser.add_argument(
         '--minibatch',
@@ -149,7 +155,7 @@ def parse_args(args_list=None):
              ' possible are "sqrt", "linear", "cosine_annealing", "multi_step" and "constant" (no learning rate decay);'
              'default is "constant"',
         type=str,
-        default="multi_step"
+        default="cosine_annealing"
     )
     parser.add_argument(
         "--mu",
@@ -165,7 +171,7 @@ def parse_args(args_list=None):
     )
     parser.add_argument(
         "--communication_probability",
-        help='communication probability, only used with L2SGD',
+        help='communication probability, used with L2SGD and AGFL',
         type=float,
         default=0.1
     )

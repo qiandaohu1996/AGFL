@@ -4,7 +4,11 @@ import warnings
 import torch
 import torch.nn as nn
 
+from utils.my_profiler import calc_exec_time
 
+calc_time=True
+
+# @calc_exec_time(calc_time=calc_time)
 def average_learners(
         learners,
         target_learner,
@@ -42,11 +46,11 @@ def average_learners(
         if target_state_dict[key].data.dtype == torch.float32:
 
             if average_params:
-                target_state_dict[key].data.fill_(0.)
+                target_state_dict[key].data.zero_()
 
             if average_gradients:
                 target_state_dict[key].grad = target_state_dict[key].data.clone()
-                target_state_dict[key].grad.data.fill_(0.)
+                target_state_dict[key].grad.data.zero_()
 
             for learner_id, learner in enumerate(learners):
                 state_dict = learner.model.state_dict(keep_vars=True)
@@ -65,12 +69,139 @@ def average_learners(
 
         else:
             # tracked batches
-            target_state_dict[key].data.fill_(0)
+            target_state_dict[key].data.zero_()
             for learner_id, learner in enumerate(learners):
                 state_dict = learner.model.state_dict()
                 target_state_dict[key].data += state_dict[key].data.clone()
 
 
+@calc_exec_time(calc_time=calc_time)
+def fuzzy_average_cluster_model(
+    client_models,
+    cluster_models,
+    membership_mat,  # use membership matrix instead of weights
+    fuzzy_m,  # add fuzzy parameter m
+    clients_weights,  # add clients_weights parameter
+    average_params=True,
+    average_gradients=False
+): 
+    clients_weights = clients_weights.to(membership_mat.device)
+    # print("membership_mat",membership_mat[2:5])
+ 
+    n_clusters=len(cluster_models)
+    for cluster_id in range(n_clusters):
+        target_state_dict = cluster_models[cluster_id].state_dict(keep_vars=True)
+
+        for key in target_state_dict:
+
+            if target_state_dict[key].data.dtype == torch.float32:
+
+                if average_params:
+                    target_state_dict[key].data.zero_()
+
+                if average_gradients:
+                    target_state_dict[key].grad = target_state_dict[key].data.clone()
+                    target_state_dict[key].grad.data.zero_()
+
+                for client_id, model in enumerate(client_models):
+                    state_dict = model.state_dict(keep_vars=True)
+                    membership_val = (membership_mat[client_id][cluster_id] * clients_weights[client_id]) ** fuzzy_m 
+                    if average_params:
+                        target_state_dict[key].data += ( membership_val * state_dict[key].data.clone())
+
+                    if average_gradients:
+                        if state_dict[key].grad is not None:
+                            target_state_dict[key].grad += ( membership_val * state_dict[key].grad.clone())
+                        elif state_dict[key].requires_grad:
+                            warnings.warn(
+                                "trying to average_gradients before back propagation,"
+                                " you should set `average_gradients=False`."
+                            )
+
+            else:
+                target_state_dict[key].data.zero_()
+                for client_id, model in enumerate(client_models):
+                    state_dict = model.state_dict()
+                    target_state_dict[key].data += ( state_dict[key].data.clone())
+
+    for cluster_id in range(n_clusters):
+        target_state_dict = cluster_models[cluster_id].state_dict(keep_vars=True)
+        # normalize each parameter in target_state_dict
+        for key in target_state_dict:
+            total_membership_val = torch.sum((membership_mat[:,cluster_id] * clients_weights) ** fuzzy_m)
+            if target_state_dict[key].data.dtype == torch.float32:
+                if average_params:
+                    target_state_dict[key].data /= ( total_membership_val)
+                if average_gradients:
+                    if state_dict[key].grad is not None:
+                        target_state_dict[key].grad.data /= ( total_membership_val)
+                    elif state_dict[key].requires_grad:
+                        warnings.warn(
+                            "trying to average_gradients before back propagation,"
+                            " you should set `average_gradients=False`."
+                        )
+
+
+@calc_exec_time(calc_time=calc_time)
+def fuzzy_average_client_model(
+        cluster_models,
+        client_models,
+        membership_mat,
+        average_params=True,
+        average_gradients=False):
+
+    n_clients = len(client_models)
+    for client_id in range(n_clients):
+        target_state_dict = client_models[client_id].state_dict(keep_vars=True)
+
+        for key in target_state_dict:
+
+            if target_state_dict[key].data.dtype == torch.float32:
+
+                if average_params:
+                    target_state_dict[key].data.zero_()
+
+                if average_gradients:
+                    target_state_dict[key].grad = target_state_dict[key].data.clone()
+                    target_state_dict[key].grad.data.zero_()
+
+                for cluster_id, model in enumerate(cluster_models):
+                    state_dict = model.state_dict(keep_vars=True)
+                    membership_val = membership_mat[client_id][cluster_id]
+                    if average_params:
+                        target_state_dict[key].data += membership_val * state_dict[key].data.clone()
+
+                    if average_gradients:
+                        if state_dict[key].grad is not None:
+                            target_state_dict[key].grad += membership_val * state_dict[key].grad.clone()
+                        elif state_dict[key].requires_grad:
+                            warnings.warn(
+                                "trying to average_gradients before back propagation,"
+                                " you should set `average_gradients=False`."
+                            )
+
+            else:
+                target_state_dict[key].data.zero_()
+                for cluster_id, model in enumerate(cluster_models):
+                    state_dict = model.state_dict()
+                    target_state_dict[key].data += (state_dict[key].data.clone())
+ 
+
+def get_param_list(models):
+        """
+        get `models` parameters as a unique flattened tensor
+        :return: torch.tensor
+        """
+        param_list = torch.stack(
+            [torch.cat([param.flatten() for param in model.parameters()]) for model in models])
+
+        return param_list
+
+
+
+
+
+@calc_exec_time(calc_time=calc_time)
 def partial_average(learners, average_learner, alpha):
     """
     performs a step towards aggregation for learners, i.e.
@@ -118,6 +249,22 @@ def differentiate_learner(target, reference_state_dict, coeff=1.):
             target_state_dict[key].grad = \
                 coeff * (target_state_dict[key].data.clone() - reference_state_dict[key].data.clone())
 
+def init_nn(nn, val=0.):
+    for para in nn.parameters():
+        para.data.fill_(val)
+    return nn
+
+def get_param_tensor(model):
+    """
+    get `model` parameters as a unique flattened tensor
+    :return: torch.tensor
+
+    """
+    param_list = []
+    for param in model.parameters():
+        param_list.append(param.data.view(-1, ))
+
+    return torch.cat(param_list)
 
 def copy_model(target, source):
     """
@@ -182,8 +329,6 @@ def simplex_projection(v, s=1):
     w = (w * (w > 0)).clip(min=0)
 
     return w
-
-
 
 
 # def trainable_params(src: Union[OrderedDict[str, torch.Tensor], torch.nn.Module], requires_name=False

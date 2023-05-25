@@ -2,11 +2,20 @@
 import string
 
 
+
+ALL_STRATEGIES = {
+    "random"
+}
+
+ALL_MODELS = {
+    "mobilenet"
+}
 LOADER_TYPE = {
     "synthetic": "tabular",
     "cifar10": "cifar10",
     "cifar100": "cifar100",
     "emnist": "emnist",
+    "emnist2": "emnist2",
     "femnist": "femnist",
     "shakespeare": "shakespeare",
 }
@@ -16,6 +25,7 @@ EXTENSIONS = {
     "cifar10": ".pkl",
     "cifar100": ".pkl",
     "emnist": ".pkl",
+    "emnist2": ".pkl",
     "femnist": ".pt",
     "shakespeare": ".txt",
 }
@@ -23,12 +33,13 @@ EXTENSIONS = {
 AGGREGATOR_TYPE = {
     "FedEM": "centralized",
     "FedAvg": "centralized",
-    "AGFL":"AGFL",
     "FedProx": "centralized",
     "local": "no_communication",
     "pFedMe": "personalized",
     "clustered": "clustered",
+    "FuzzyFL": "FuzzyFL",
     "APFL": "APFL",
+    "AGFL":"AGFL",
     "L2SGD": "L2SGD",
     "AFL": "AFL",
     "FFL": "FFL"
@@ -39,7 +50,8 @@ CLIENT_TYPE = {
     "AFL": "AFL",
     "FFL": "FFL",
     "APFL": "normal",
-    "AGFL": "normal",
+    "AGFL": "AGFL",
+    "FuzzyFL": "FuzzyFL",
     "L2SGD": "normal",
     "FedAvg": "normal",
     "FedProx": "normal",
@@ -83,3 +95,7 @@ CHARACTERS_WEIGHTS = {
     'y': 0.6388302610200002
 }
 
+LOCAL_HEAD_UPDATES = 10  # number of epochs for local heads used in FedRep
+
+# NUM_WORKERS = os.cpu_count()  # number of workers used to load data and in GPClassifier
+NUM_WORKERS = 1

@@ -1,7 +1,7 @@
 import time
 
-from models import *
-from datasets import *
+from utils.models import *
+from utils.datasets import *
 from learners.learner import *
 from learners.learners_ensemble import *
 from client import *
@@ -13,6 +13,7 @@ from .constants import *
 from .decentralized import *
 
 from torch.utils.data import DataLoader
+import time
 
 from tqdm import tqdm
 
@@ -29,7 +30,8 @@ def get_data_dir(experiment_name):
 
     return data_dir
 
-
+# @calc_exec_time(calc_time=True)
+# @memory_profiler
 def get_learner(
         name,
         device,
@@ -83,7 +85,7 @@ def get_learner(
         metric = accuracy
         model = get_mobilenet(n_classes=100).to(device)
         is_binary_classification = False
-    elif name == "emnist" or name == "femnist":
+    elif name == "emnist" or name == "femnist"  or name == "emnist2":
         criterion = nn.CrossEntropyLoss(reduction="none").to(device)
         metric = accuracy
         model = FemnistCNN(num_classes=62).to(device)
@@ -199,7 +201,6 @@ def get_learners_ensemble(
         return LearnersEnsemble(learners=learners, learners_weights=learners_weights)
 
 def get_agfl_learners_ensemble(
-        n_learners,
         name,
         device,
         optimizer_name,
@@ -210,6 +211,7 @@ def get_agfl_learners_ensemble(
         seed,
         alpha,
         adaptive_alpha,
+        n_learners=2,
         lr_lambda=0.05,
         input_dim=None,
         output_dim=None
@@ -255,7 +257,7 @@ def get_loaders(type_, root_path, batch_size, is_validation):
     elif type_ == "cifar100":
         inputs, targets = get_cifar100()
     elif type_ == "emnist":
-        inputs, targets = get_emnist()
+        inputs, targets = get_emnist()    
     else:
         inputs, targets = None, None
 
@@ -325,10 +327,11 @@ def get_loader(type_, path, batch_size, train, inputs=None, targets=None):
         dataset = SubCIFAR10(path, cifar10_data=inputs, cifar10_targets=targets)
     elif type_ == "cifar100":
         dataset = SubCIFAR100(path, cifar100_data=inputs, cifar100_targets=targets)
-    elif type_ == "emnist":
+    elif type_ in ["emnist", "emnist2"]:
         dataset = SubEMNIST(path, emnist_data=inputs, emnist_targets=targets)
+     
     elif type_ == "femnist":
-        dataset = SubFEMNIST(path)
+        dataset = SubFEMNIST(path) 
     elif type_ == "shakespeare":
         dataset = CharacterDataset(path, chunk_len=SHAKESPEARE_CONFIG["chunk_len"])
     else:
@@ -341,7 +344,6 @@ def get_loader(type_, path, batch_size, train, inputs=None, targets=None):
     drop_last = ((type_ == "cifar100") or (type_ == "cifar10")) and (len(dataset) > batch_size) and train
 
     return DataLoader(dataset, batch_size=batch_size, shuffle=train, drop_last=drop_last)
-
 
 def get_client(
         client_type,
@@ -410,7 +412,16 @@ def get_client(
             local_steps=local_steps,
             tune_locally=tune_locally,
         )
-         
+    elif client_type == "FuzzyFL":
+        return FuzzyClient(
+            learners_ensemble=learners_ensemble,
+            train_iterator=train_iterator,
+            val_iterator=val_iterator,
+            test_iterator=test_iterator,
+            logger=logger,
+            local_steps=local_steps,
+            tune_locally=tune_locally,
+        ) 
     else:
         return Client(
             learners_ensemble=learners_ensemble,
@@ -434,6 +445,7 @@ def get_aggregator(
         q,
         sampling_rate,
         log_freq,
+        fuzzy_m,
         global_train_logger,
         global_test_logger,
         test_clients,
@@ -587,7 +599,24 @@ def get_aggregator(
             test_clients=test_clients,
             global_train_logger=global_train_logger,
             global_test_logger=global_test_logger,
+            communication_probability=communication_probability,
             sampling_rate=sampling_rate,
+            single_batch_flag=single_batch_flag,
+            verbose=verbose,
+            seed=seed
+        )
+    elif aggregator_type == "FuzzyFL":
+        return FuzzyGroupAggregator(
+            clients=clients,
+            global_learners_ensemble=global_learners_ensemble,
+            log_freq=log_freq,
+            test_clients=test_clients,
+            pre_rounds=pre_rounds,
+            global_train_logger=global_train_logger,
+            global_test_logger=global_test_logger,
+            communication_probability=communication_probability,
+            sampling_rate=sampling_rate,
+            fuzzy_m=fuzzy_m,
             single_batch_flag=single_batch_flag,
             verbose=verbose,
             seed=seed
@@ -610,5 +639,6 @@ def get_aggregator(
             "{aggregator_type} is not a possible aggregator type."
             " Available are: `no_communication`, `centralized`,"
             " `personalized`, `clustered`, `fednova`, `AFL`,"
-            " `FFL` ,  `AGFL` and `decentralized`."
+            " `FFL` ,  `AGFL`, `FuzzyFL` and `decentralized`."
         )
+    
