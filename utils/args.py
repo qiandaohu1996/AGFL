@@ -65,7 +65,7 @@ def parse_args(args_list=None):
         '--fuzzy_m',
         help=' default is 2.0',
         type=float,
-        default=1.1
+        default=2.
     )
     parser.add_argument(
         '--adaptive_alpha',
@@ -155,7 +155,7 @@ def parse_args(args_list=None):
              ' possible are "sqrt", "linear", "cosine_annealing", "multi_step" and "constant" (no learning rate decay);'
              'default is "constant"',
         type=str,
-        default="cosine_annealing"
+        default="linear"
     )
     parser.add_argument(
         "--mu",
@@ -170,7 +170,7 @@ def parse_args(args_list=None):
         default=10
     )
     parser.add_argument(
-        "--communication_probability",
+        "--comm_prob",
         help='communication probability, used with L2SGD and AGFL',
         type=float,
         default=0.1

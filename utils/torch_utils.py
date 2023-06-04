@@ -89,6 +89,7 @@ def fuzzy_average_cluster_model(
     # print("membership_mat",membership_mat[2:5])
  
     n_clusters=len(cluster_models)
+
     for cluster_id in range(n_clusters):
         target_state_dict = cluster_models[cluster_id].state_dict(keep_vars=True)
 
@@ -105,6 +106,11 @@ def fuzzy_average_cluster_model(
 
                 for client_id, model in enumerate(client_models):
                     state_dict = model.state_dict(keep_vars=True)
+                    print("membership_mat ",(membership_mat))
+
+                    # print("membership_mat len",(membership_mat[client_id]))
+
+                    print("clients_weights ", clients_weights)
                     membership_val = (membership_mat[client_id][cluster_id] * clients_weights[client_id]) ** fuzzy_m 
                     if average_params:
                         target_state_dict[key].data += ( membership_val * state_dict[key].data.clone())
@@ -125,6 +131,7 @@ def fuzzy_average_cluster_model(
                     target_state_dict[key].data += ( state_dict[key].data.clone())
 
     for cluster_id in range(n_clusters):
+    
         target_state_dict = cluster_models[cluster_id].state_dict(keep_vars=True)
         # normalize each parameter in target_state_dict
         for key in target_state_dict:
@@ -152,6 +159,7 @@ def fuzzy_average_client_model(
 
     n_clients = len(client_models)
     for client_id in range(n_clients):
+    
         target_state_dict = client_models[client_id].state_dict(keep_vars=True)
 
         for key in target_state_dict:
@@ -183,6 +191,7 @@ def fuzzy_average_client_model(
             else:
                 target_state_dict[key].data.zero_()
                 for cluster_id, model in enumerate(cluster_models):
+                
                     state_dict = model.state_dict()
                     target_state_dict[key].data += (state_dict[key].data.clone())
  
@@ -196,10 +205,6 @@ def get_param_list(models):
             [torch.cat([param.flatten() for param in model.parameters()]) for model in models])
 
         return param_list
-
-
-
-
 
 @calc_exec_time(calc_time=calc_time)
 def partial_average(learners, average_learner, alpha):
@@ -228,7 +233,18 @@ def partial_average(learners, average_learner, alpha):
                     (1-alpha) * target_state_dict[key].data + alpha * source_state_dict[key].data
                 # print(f"key: {key}, target_state_dict[key].data: {target_state_dict[key].data}, source_state_dict[key].data: {source_state_dict[key].data}")
          
-    
+
+def apfl_partial_average(personal_learner, global_learner, alpha):
+
+    source_state_dict = global_learner.model.state_dict()
+    target_state_dict = personal_learner.model.state_dict() 
+
+    for key in source_state_dict:
+        if source_state_dict[key].data.dtype == torch.float32:
+            target_state_dict[key].data = \
+                alpha *   target_state_dict[key].data + (1-alpha) * source_state_dict[key].data
+            
+ 
 def differentiate_learner(target, reference_state_dict, coeff=1.):
     """
     set the gradient of the model to be the difference between `target` and `reference` multiplied by `coeff`
@@ -331,22 +347,22 @@ def simplex_projection(v, s=1):
     return w
 
 
-# def trainable_params(src: Union[OrderedDict[str, torch.Tensor], torch.nn.Module], requires_name=False
-# ) -> Union[List[torch.Tensor], Tuple[List[str], List[torch.Tensor]]]:
-#     parameters = []
-#     keys = []
-#     if isinstance(src, OrderedDict):
-#         for name, param in src.items():
-#             if param.requires_grad:
-#                 parameters.append(param)
-#                 keys.append(name)
-#     elif isinstance(src, torch.nn.Module):
-#         for name, param in src.state_dict(keep_vars=True).items():
-#             if param.requires_grad:
-#                 parameters.append(param)
-#                 keys.append(name)
+    # def trainable_params(src: Union[OrderedDict[str, torch.Tensor], torch.nn.Module], requires_name=False
+    # ) -> Union[List[torch.Tensor], Tuple[List[str], List[torch.Tensor]]]:
+    #     parameters = []
+    #     keys = []
+    #     if isinstance(src, OrderedDict):
+    #         for name, param in src.items():
+    #             if param.requires_grad:
+    #                 parameters.append(param)
+    #                 keys.append(name)
+    #     elif isinstance(src, torch.nn.Module):
+    #         for name, param in src.state_dict(keep_vars=True).items():
+    #             if param.requires_grad:
+    #                 parameters.append(param)
+    #                 keys.append(name)
 
-#     if requires_name:
-#         return keys, parameters
-#     else:
-#         return parameters
+    #     if requires_name:
+    #         return keys, parameters
+    #     else:
+    #         return parameters

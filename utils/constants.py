@@ -10,25 +10,50 @@ ALL_STRATEGIES = {
 ALL_MODELS = {
     "mobilenet"
 }
-LOADER_TYPE = {
-    "synthetic": "tabular",
-    "cifar10": "cifar10",
-    "cifar100": "cifar100",
-    "emnist": "emnist",
-    "emnist2": "emnist2",
-    "femnist": "femnist",
-    "shakespeare": "shakespeare",
-}
 
-EXTENSIONS = {
-    "tabular": ".pkl",
-    "cifar10": ".pkl",
-    "cifar100": ".pkl",
-    "emnist": ".pkl",
-    "emnist2": ".pkl",
+
+DEFAULT_LOADER_TYPE = "tabular"
+DEFAULT_EXTENSION = ".pkl"
+
+
+SPECIAL_EXTENSIONS = {
     "femnist": ".pt",
     "shakespeare": ".txt",
 }
+
+def get_loader_type(data_type):
+    return DEFAULT_LOADER_TYPE if data_type == "synthetic" else data_type
+ 
+def get_extension(data_type):
+    return SPECIAL_EXTENSIONS.get(data_type, DEFAULT_EXTENSION)
+
+LOADER_TYPE = [ 
+    "synthetic",
+    "cifar10",
+    "cifar100",
+    "emnist",
+    "emnist_pathologic",
+    "emnist_pathologic_cl10",
+    "emnist_pathologic_cl20",
+    "emnist_component4",
+    "emnist20",
+    "femnist",
+    "shakespeare"]
+
+
+# EXTENSIONS = {
+#     "tabular": ".pkl",
+#     "cifar10": ".pkl",
+#     "cifar100": ".pkl",
+#     "emnist": ".pkl",
+#     "emnist_pathologic": ".pkl",
+#     "emnist_pathologic_cl10": ".pkl",
+#     "emnist_pathologic_cl20": ".pkl",
+#     "emnist_component4": ".pkl",
+#     "emnist20": ".pkl",
+#     "femnist": ".pt",
+#     "shakespeare": ".txt",
+# }
 
 AGGREGATOR_TYPE = {
     "FedEM": "centralized",

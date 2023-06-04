@@ -188,7 +188,7 @@ class FuzzyCluster():
             for i in range(n_clusters):
                 # 添加额外的维度以计算余弦相似度
                 cos_sim = F.cosine_similarity(client_params.unsqueeze(0), cluster_params[i].unsqueeze(0))
-                distances[i] = (1.0 - cos_sim)*10000
+                distances[i] = (1.0 - cos_sim)
             print("distances ",distances)
             
             for cluster_id in range(n_clusters):

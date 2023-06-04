@@ -115,7 +115,7 @@ class ProxSGD(Optimizer):
                         weight_decay=weight_decay, nesterov=nesterov)
         if nesterov and (momentum <= 0 or dampening != 0):
             raise ValueError("Nesterov momentum requires a momentum and zero dampening")
-        super(ProxSGD, self).__init__(params, params)
+        super(ProxSGD, self).__init__(params, defaults)
 
         self.mu = mu
 

@@ -9,8 +9,7 @@ from utils.my_profiler import *
 # from torchvision.models.mobilenetv2 import MobileNetV2Weights
 
 class LinearLayer(nn.Module):
-    # @calc_exec_time(calc_time=True)
-    # @memory_profiler
+ 
     def __init__(self, input_dimension, num_classes, bias=True):
         super(LinearLayer, self).__init__()
         self.input_dimension = input_dimension
@@ -97,7 +96,8 @@ class NextCharacterLSTM(nn.Module):
 
     def forward(self, input_):
         encoded = self.encoder(input_)
-        output, _ = self.rnn(encoded)
+        self.rnn.flatten_parameters() #参数压缩
+        output, _ = self.rnn(encoded) 
         output = self.decoder(output)
         output = output.permute(0, 2, 1)  # change dimension to (B, C, T)
         return output
