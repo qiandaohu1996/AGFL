@@ -112,7 +112,6 @@ class Learner:
         # torch.nn.utils.clip_grad_norm_(self.model.parameters(), 1.)
 
         return loss.detach()
- 
 
     def fit_batch(self, batch, weights=None):
         
@@ -122,10 +121,10 @@ class Learner:
         
         # gradient_norm = torch.norm(torch.cat([param.grad.flatten() for param in self.model.parameters()]))
         # 输出梯度范数的值
-        # print(f"Gradient Norm: {gradient_norm.item():.3f}",)
-        # torch.nn.utils.clip_grad_norm_(self.model.parameters(), 100.)
+        # print(f"before Gradient Norm: {gradient_norm.item():.3f}",)
+        torch.nn.utils.clip_grad_norm_(self.model.parameters(), 100.)
         # gradient_norm = torch.norm(torch.cat([param.grad.flatten() for param in self.model.parameters()]))
-        # print(f"Gradient Norm: {gradient_norm.item():.3f}",)
+        # print(f"after Gradient Norm: {gradient_norm.item():.3f}",)
         self.optimizer_step()
 
         # x, y, _ = batch
@@ -194,7 +193,7 @@ class Learner:
             # 输出梯度范数的值
             # print(f"Gradient Norm:{gradient_norm.item():.3f}",)
             torch.nn.utils.clip_grad_norm_(self.model.parameters(), 100.)
-            # gradient_norm = torch.norm(torch.cat([param.grad.flatten() for param in self.model.parameters()]))
+            gradient_norm = torch.norm(torch.cat([param.grad.flatten() for param in self.model.parameters()]))
 
             # 输出梯度范数的值
             # print(f"Gradient Norm:{gradient_norm.item():.3f}",)

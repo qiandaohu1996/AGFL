@@ -215,7 +215,8 @@ class LearnersEnsemble(object):
 
     def __getitem__(self, idx):
         return self.learners[idx]
-    
+
+
 class AGFLLearnersEnsemble(LearnersEnsemble):
 
     def __init__(self, learners, learners_weights, alpha, adaptive_alpha, lr_lambda=0.05 ):
@@ -223,12 +224,97 @@ class AGFLLearnersEnsemble(LearnersEnsemble):
             learners=learners, 
             learners_weights=learners_weights
             )
-        
-        self.alpha=alpha
+
+        self.alpha = torch.tensor([alpha] + [(1 - alpha) / (len(learners) - 1)] * (len(learners) - 1), device=self.device)
+
         self.adaptive_alpha=adaptive_alpha
-        self.lr_lambda=lr_lambda
         self.pre_model=None
         self.gd_model=None
+
+
+    def update_alpha(self):
+        # n_clusters = len(self.learners) - 1
+        alpha_grad = torch.zeros(len(self.learners), device=self.device)
+        eta_alpha  = self.learners[0].get_optimizer_lr()
+
+        for i in range(1,len(self.learners)):
+            for local_param, cluster_param in zip(
+                    trainable_params(self.learners[0].model), trainable_params(self.learners[i].model)):
+                
+                diff = (local_param.data - cluster_param.data).view(-1)
+                grad = (self.alpha[i] * local_param.grad.data + (1 - self.alpha[i]) * cluster_param.grad.data).view(-1)
+                alpha_grad[i] += diff @ grad
+
+            alpha_grad[i] += 0.02 * self.alpha[i]
+            self.alpha[i] -= eta_alpha * alpha_grad[i]
+        
+        # softmax normalization
+        self.alpha = torch.exp(self.alpha) / torch.sum(torch.exp(self.alpha))  
+        self.alpha = torch.clamp(self.alpha, 0.01, 0.99)
+        
+    def fit_batch(self, batch, weights):
+
+        client_updates = torch.zeros(len(self.learners), self.model_dim)
+
+        for learner_id, learner in enumerate(self.learners):
+
+            print("learner",learner_id)
+            old_params = learner.get_param_tensor()
+            if weights is not None:
+                learner.fit_batch(batch=batch, weights=weights[learner_id])
+            else:
+                learner.fit_batch(batch=batch, weights=None)
+            params = learner.get_param_tensor()
+            client_updates[learner_id] = (params - old_params)
+
+        if self.adaptive_alpha:
+            self.update_alpha() 
+        partial_average([self.learners[0]], self.learners[1], self.alpha)
+
+        return client_updates.cpu().numpy()
+
+class APFLLearnersEnsemble(LearnersEnsemble):
+
+    def __init__(self, learners, learners_weights, alpha,adaptive_alpha):
+        super().__init__(
+            learners=learners, 
+            learners_weights=learners_weights
+            )
+
+        self.alpha = alpha
+        self.adaptive_alpha=adaptive_alpha
+   
+    def update_alpha(self):
+        alpha_grad = 0
+        local_lr = self.learners[0].get_optimizer_lr()
+        # for local_param, global_param in zip (self.learners[0].model.parameters(), self.learners[1].model.parameters()) :
+        for local_param, global_param in zip(
+                    trainable_params(self.learners[0].model), trainable_params(self.learners[1].model)
+                ):
+            diff = (local_param.data - global_param.data).flatten()
+            grad = (
+                    self.alpha * local_param.grad.data
+                    + (1 - self.alpha) * global_param.grad.data
+                ).flatten()
+            alpha_grad += diff @ grad
+
+        alpha_grad += 0.02 * self.alpha
+        self.alpha -= local_lr * alpha_grad
+        self.alpha = np.clip(self.alpha.cpu().numpy(), 0.0000001, 0.999999) 
+
+    
+
+class GroupAPFLLearnersEnsemble(LearnersEnsemble):
+
+    def __init__(self, learners, learners_weights, alpha, adaptive_alpha, lr=0.05):
+        super().__init__(
+            learners=learners,
+            learners_weights=learners_weights
+        )
+
+        self.alpha = alpha
+        self.adaptive_alpha = adaptive_alpha
+        
 
     def update_alpha(self):
         alpha_grad = 0
@@ -245,7 +331,9 @@ class AGFLLearnersEnsemble(LearnersEnsemble):
 
         alpha_grad += 0.02 * self.alpha
         self.alpha -= self.lr_lambda * alpha_grad
-        self.alpha = np.clip(self.alpha.cpu().numpy(), 0.02, 0.98) 
+        self.alpha = np.clip(self.alpha.cpu().numpy(), 0.001, 0.999) 
+
+
     
     def fit_batch(self, batch, weights):
 
@@ -268,31 +356,6 @@ class AGFLLearnersEnsemble(LearnersEnsemble):
 
         return client_updates.cpu().numpy()
  
-
-    # def fit_svrg_epoch(self, iterator, n_epoch, n_cluster_clients, weights=None):
-    #     # self.print_model_params(self.learners[0].model)
-    #     pre_mini_learner=deepcopy(self.learners[0])
-
-    #     lr=self.learners[0].get_optimizer_lr()
-
-    #     if n_epoch==0:    
-    #         # print(f"{n_epoch} fit_epoch")
-    #         self.fit_epoch(iterator=iterator,weights=weights)
-    #         cluster_learner=deepcopy(self.learners[0])
-        
-    #     else: 
-    #         # print(f"{n_epoch} fit_batch")
-    #         pre_mini_learner.fit_batch(iterator, weights=weights)
-    #         self.fit_batch(iterator, weights=weights)
-
-    #         #Backward
-    #         for param1, param2, param3 in zip(self.learners[0].model.parameters(), pre_mini_learner.model.parameters(), cluster_learner.model.parameters()): 
-    #             param1.data -= lr * (param1.grad.data - param2.grad.data + (1./n_cluster_clients) * param3.grad.data)
-
-    #     for learner in self.learners:
-    #         if learner.lr_scheduler is not None:
-    #             learner.lr_scheduler.step()
-
     
 class LanguageModelingLearnersEnsemble(LearnersEnsemble):
     def evaluate_iterator(self, iterator):
