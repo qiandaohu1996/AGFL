@@ -1,3 +1,4 @@
+import os
 import numpy as np
 import torch.nn.functional as F
 
@@ -93,11 +94,10 @@ class Client(object):
             self.train_loader = iter(self.train_iterator)
             batch = next(self.train_loader)
         except:
-            # 处理最后一批次的情况
             batch = None
         return batch
 
-    def step(self, single_batch_flag=False, *args, **kwargs):
+    def step(self, single_batch_flag=True, *args, **kwargs):
         """
         perform on step for the client
 
@@ -136,6 +136,7 @@ class Client(object):
             self.update_tuned_learners()
 
         learners_ensemble = self.tuned_learners_ensemble if self.tune_locally else self.learners_ensemble
+        # batch = self.get_next_batch()
 
         loss, acc = learners_ensemble.evaluate_iterator(iterator)
 
@@ -146,10 +147,13 @@ class Client(object):
 
     def write_train_logs(self):
         return self._write_logs(self.logger, self.val_iterator, "Train")
-
+    
     def write_test_logs(self):
         return self._write_logs(self.logger, self.test_iterator, "Test")
 
+    def write_local_test_logs(self):
+        return self._write_logs(self.logger, self.test_iterator, "Local_Test")
+    
     def write_logs(self):
         train_loss, train_acc = self.write_train_logs()
         test_loss, test_acc = self.write_test_logs()
@@ -172,8 +176,38 @@ class Client(object):
             learner.fit_epochs(self.train_iterator, self.local_steps,
                                weights=self.samples_weights[learner_id])
 
+    def save_state(self, client_id, dir_path):
+        """
+        save the state of the client, i.e., the state dictionary of each `learner` in `learners_ensemble`
+        as `.pt` file, and `learners_weights` as a single numpy array (`.np` file).
 
-class AGFLClient(Client):
+        :param dir_path:
+        """
+        for learner_id, learner in enumerate(self.learners_ensemble):
+            save_path = os.path.join(dir_path, f"chkpts_client{client_id}_learner{learner_id}.pt")
+            torch.save(learner.model.state_dict(), save_path)
+
+        # save learners_weights
+        learners_weights_path = os.path.join(dir_path, f"client{client_id}_learners_weights.npy")
+        np.save(learners_weights_path, self.learners_ensemble.learners_weights)
+
+    def load_state(self, client_id, dir_path):
+        """
+        load the state of the client, i.e., the state dictionary of each `learner` in `learners_ensemble`
+        from a `.pt` file, and `learners_weights` from numpy array (`.np` file).
+
+        :param dir_path:
+        """
+        for learner_id, learner in enumerate(self.learners_ensemble):
+            chkpts_path = os.path.join(dir_path, f"chkpts_client{client_id}_learner{learner_id}.pt")
+            learner.model.load_state_dict(torch.load(chkpts_path))
+
+        # load learners_weights
+        learners_weights_path = os.path.join(dir_path, f"client{client_id}_learners_weights.npy")
+        self.learners_ensemble.learners_weights = np.load(learners_weights_path)
+
+
+class AGFL2Client(Client):
 
     def __init__(
             self,
@@ -312,9 +346,6 @@ class AGFLClient(Client):
         # TODO: add flag arguments to use `free_gradients`
         # self.learners_ensemble.free_gradients()
 
-
-
-
     def pre_write_logs(self, dataset_type):
         if self.tune_locally:
             self.update_tuned_learners()
@@ -384,6 +415,104 @@ class AGFLClient(Client):
             self.logger.add_scalar(metric_name, metric_value, self.counter)
 
         return test_loss, test_acc
+
+
+class AGFLClient(Client):
+
+    def __init__(
+            self,
+            learners_ensemble,
+            train_iterator,
+            val_iterator,
+            test_iterator,
+            logger,
+            local_steps,
+            tune_locally=False,
+            # svrg_interval=5
+    ):
+        super(AGFLClient, self).__init__(
+            learners_ensemble=learners_ensemble,
+            train_iterator=train_iterator,
+            val_iterator=val_iterator,
+            test_iterator=test_iterator,
+            logger=logger,
+            local_steps=local_steps,
+            tune_locally=tune_locally
+        )
+        self.counter = 0
+        
+ 
+
+    def pre_write_logs(self, dataset_type):
+        if self.tune_locally:
+            self.update_tuned_learners()
+            learner = self.tuned_learners_ensemble[0]
+        else:
+            learner = self.learners_ensemble[0]
+
+        if dataset_type == "train":
+            iterator = self.val_iterator
+            loss_key = "Train/Loss"
+            metric_key = "Train/Metric"
+        elif dataset_type == "test":
+            iterator = self.test_iterator
+            loss_key = "Test/Loss"
+            metric_key = "Test/Metric"
+
+        loss, acc = learner.evaluate_iterator(iterator)
+
+        self.logger.add_scalar(loss_key, loss, self.counter)
+        self.logger.add_scalar(metric_key, acc, self.counter)
+
+        return loss, acc
+
+    def write_train_logs(self):
+        if self.tune_locally:
+            self.update_tuned_learners()
+
+            learner1 = self.tuned_learners_ensemble[0]
+            learner2 = self.tuned_learners_ensemble[1]
+        else:
+            learner1 = self.learners_ensemble[0]
+            learner2 = self.learners_ensemble[1]
+
+        train_loss, train_acc = learner1.evaluate_iterator(self.val_iterator)
+        train_loss2, train_acc2 = learner2.evaluate_iterator(self.val_iterator)
+
+        metrics = [
+            ("Train/Loss", train_loss),
+            ("Train/Metric", train_acc),
+            ("Global_Train/Loss", train_loss2),
+            ("Global_Train/Metric", train_acc2),
+        ]
+
+        for metric_name, metric_value in metrics:
+            self.logger.add_scalar(metric_name, metric_value, self.counter)
+
+        return train_loss, train_acc, train_loss2, train_acc2
+
+    def write_test_logs(self):
+        if self.tune_locally:
+            self.update_tuned_learners()
+
+        if self.tune_locally:
+            learner = self.tuned_learners_ensemble[0]
+        else:
+            learner = self.learners_ensemble[0]
+
+        test_loss, test_acc = learner.evaluate_iterator(self.test_iterator)
+
+        metrics = [
+            ("Global_Test/Loss", test_loss),
+            ("Global_Test/Metric", test_acc)
+        ]
+
+        for metric_name, metric_value in metrics:
+            self.logger.add_scalar(metric_name, metric_value, self.counter)
+
+        return test_loss, test_acc
+
+
 
 class FedRepClient(Client):
     """
@@ -467,40 +596,7 @@ class MixtureClient(Client):
         torch.cuda.empty_cache()
 
 
-class FuzzyClient(Client): 
-    
 
-    def update_membership_loss(self,membership_mat, losses, client_id):
-
-        membership_mat[client_id]=F.softmax(losses.T,dim=1).T.mean(dim=1)
-    # @calc_exec_time(calc_time=True)
-    # @memory_profiler
-    def update_membership_mat(self, membership_mat, cluster_params, client_params, client_id,fuzzy_m):
-        p = float(2 / (fuzzy_m - 1))
-        n_clusters = cluster_params.size(0)
-   
-        distances = torch.zeros(n_clusters, device=client_params.device)
-        with torch.no_grad():
-            for i in range(n_clusters):
-                diff = client_params - cluster_params[i]
-                distances[i]= torch.norm(diff) 
-
-            print("distances",distances)
-            distances =distances-distances.mean()
-            print("distances after mean",distances)
-
-            # membership_mat[client_id]=F.softmax(distances,dim=0).T
-
-            for cluster_id in range(n_clusters):
-                den = 0.0
-                for j in range(n_clusters):
-                    den += (distances[cluster_id] / distances[j])  ** p
-                    if den>1.e+10: den=1.e+10
-                print("den ", den)
-                membership_mat[client_id, cluster_id] = 1.0 / den
-                torch.cuda.empty_cache()
-
-        return membership_mat
     
 class AgnosticFLClient(Client):
     def __init__(

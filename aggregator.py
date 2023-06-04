@@ -82,6 +82,7 @@ class Aggregator(ABC):
             global_learners_ensemble,
             global_train_logger,
             global_test_logger,
+            local_test_logger,
             single_batch_flag,
             sampling_rate=1.,
             log_freq=10,
@@ -105,12 +106,12 @@ class Aggregator(ABC):
 
         self.global_learners_ensemble = global_learners_ensemble
         self.device = self.global_learners_ensemble.device
+        self.local_test_logger = local_test_logger
 
         self.log_freq = log_freq
         self.verbose = verbose
         self.global_train_logger = global_train_logger
-        self.global_test_logger = global_test_logger
-
+        self.global_test_logger = global_test_logger 
         self.model_dim = self.global_learners_ensemble.model_dim
 
         self.n_clients = len(clients)
@@ -132,7 +133,7 @@ class Aggregator(ABC):
         self.sampled_clients = list()
         self.single_bacth_flag = single_batch_flag
         self.c_round = 0
-        if type(self) != GroupAPFL and type(self) != APFLAggregator:
+        if type(self) != GroupAPFL and type(self) != APFLAggregator :
             self.write_logs()
 
     @abstractmethod
@@ -153,6 +154,8 @@ class Aggregator(ABC):
             client.update_sample_weights()
             # client.update_learners_weights()
 
+
+    
     def _write_logs(self, logger, clients, log_type):
             # print(f"len({log_type.lower()} clients)", len(clients))
 
@@ -162,7 +165,10 @@ class Aggregator(ABC):
 
                 for client_id, client in enumerate(clients):
                     loss, acc = write_logs_func(client)
-                    n_samples = client.n_train_samples if log_type == "Train" else client.n_test_samples
+                    if hasattr(clients, 'n_train_samples'):
+                        n_samples= client.n_train_samples
+                    else: 
+                        n_samples= client.n_test_samples
 
                     total_loss += loss * n_samples
                     total_acc += acc * n_samples
@@ -178,7 +184,8 @@ class Aggregator(ABC):
                 logger.add_scalar(f"{log_type}/Metric", avg_acc, self.c_round)
 
                 if self.verbose > 0:
-                    print(f"\n{log_type} Loss: {avg_loss:.3f} | {log_type} Acc: {avg_acc * 100:.3f}%")
+                    print(f"{log_type} Loss: {avg_loss:.3f} | {log_type} Acc: {avg_acc * 100:.3f}%")
+
 
     def write_logs(self):
         self.update_test_clients()
@@ -187,7 +194,11 @@ class Aggregator(ABC):
         self._write_logs(self.global_test_logger, self.test_clients, "Test")
 
         if self.verbose > 0:
-            print("#" * 80)
+            print("#"*70)
+
+    def write_local_test_logs(self):
+        self._write_logs(self.local_test_logger, self.clients, "Local_Test")
+
 
     def save_state(self, dir_path):
         """
@@ -286,8 +297,10 @@ class CentralizedAggregator(Aggregator):
         self.sample_clients()
 
         for client_id,client in enumerate( self.sampled_clients):
-            print("client_id ", client_id)
+            # print("client_id ", client_id)
             client.step(self.single_bacth_flag)
+        if self.c_round % self.log_freq == 0:
+            self.write_local_test_logs()
 
         for learner_id, learner in enumerate(self.global_learners_ensemble):
             learners = [client.learners_ensemble[learner_id]
@@ -297,10 +310,10 @@ class CentralizedAggregator(Aggregator):
         # assign the updated model to all clients
         self.update_clients()
 
-        self.c_round += 1
-
         if self.c_round % self.log_freq == 0:
             self.write_logs()
+        self.c_round += 1
+
         torch.cuda.empty_cache()
 
     def update_clients(self):
@@ -345,6 +358,8 @@ class APFLAggregator(Aggregator):
             log_freq,
             global_train_logger,
             global_test_logger,
+            local_test_logger,
+            single_batch_flag,
             sampling_rate=1.,
             sample_with_replacement=False,
             test_clients=None,
@@ -357,6 +372,8 @@ class APFLAggregator(Aggregator):
             log_freq=log_freq,
             global_train_logger=global_train_logger,
             global_test_logger=global_test_logger,
+            local_test_logger = local_test_logger,
+            single_batch_flag=single_batch_flag,
             sampling_rate=sampling_rate,
             sample_with_replacement=sample_with_replacement,
             test_clients=test_clients,
@@ -364,19 +381,106 @@ class APFLAggregator(Aggregator):
             seed=seed
         )
         assert self.n_learners == 2, "APFL requires two learners"
+        self.single_batch_flag=single_batch_flag
 
     def mix(self):
         self.sample_clients()
 
         for client in self.sampled_clients:
+            
+            client.step(self.single_batch_flag)
+            client_learner=client.learners_ensemble
+
+            if client_learner.adaptive_alpha:
+                client_learner.update_alpha() 
+                apfl_partial_average(client_learner[0], client_learner[1], client_learner.alpha)
+
+        if self.c_round % 5 ==0:
+            average_learners(
+                learners=[client.learners_ensemble[0] for client in self.clients],
+                target_learner=self.global_learners_ensemble[0],
+                weights=self.clients_weights
+            )
+            # assign the updated model to all clients
+            self.update_clients()
+
+        self.c_round += 1
+ 
+        if self.c_round % self.log_freq == 0:
+            self.write_logs()
+
+    def write_logs(self):
+            ## 记录 本地训练精度 本地测试精度 平均值
+        self._write_logs(self.global_train_logger, self.clients, "Train")
+        self._write_logs(self.local_test_logger, self.clients, "Local_Test")
+
+        if self.verbose > 0:
+            print("#"*70)
+ 
+    def update_clients(self):
+        for client in self.clients:
+
+            copy_model(
+                client.learners_ensemble[0].model, self.global_learners_ensemble[0].model)
+
+            if callable(getattr(client.learners_ensemble[0].optimizer, "set_initial_params", None)):
+                client.learners_ensemble[0].optimizer.set_initial_params(
+                    self.global_learners_ensemble[0].model.parameters()
+                )
+
+
+class AGFLAggregator(Aggregator):
+    r"""
+    Implements
+        `Adaptive Personalized Federated Learning`__(https://arxiv.org/abs/2003.13461)
+
+    """
+
+    def __init__(
+            self,
+            clients,
+            global_learners_ensemble,
+            log_freq,
+            global_train_logger,
+            global_test_logger,
+            sampling_rate=1.,
+            sample_with_replacement=False,
+            test_clients=None,
+            verbose=0,
+            seed=None
+    ):
+        super(AGFLAggregator, self).__init__(
+            clients=clients,
+            global_learners_ensemble=global_learners_ensemble,
+            log_freq=log_freq,
+            global_train_logger=global_train_logger,
+            global_test_logger=global_test_logger,
+            sampling_rate=sampling_rate,
+            sample_with_replacement=sample_with_replacement,
+            test_clients=test_clients,
+            verbose=verbose,
+            seed=seed
+        )
+        # assert self.n_learners == 2, "APFL requires two learners"
+
+    def mix(self):
+        self.sample_clients()
+        
+        # learners = [deepcopy(self.clients[0].learners_ensemble[0])
+        #             for _ in range(self.n_clusters)]
+        # self.cluster_learners= LearnersEnsemble(
+        #     learners=learners, learners_weights=torch.ones(self.n_clusters) / self.n_clusters)
+        
+
+        for client in self.sampled_clients:
             for _ in range(client.local_steps):
                 client.step(self.single_batch_flag)
 
-                # partial_average(
-                #     learners=[client.learners_ensemble[1]],
-                #     average_learner=client.learners_ensemble[0],
-                #     alpha=self.alpha
-                # )
+                partial_average(
+                    learners=[client.learners_ensemble],
+                    average_learner=client.learners_ensemble[0],
+                    alpha=client.learners_ensemble.alpha
+                )
 
         average_learners(
             learners=[client.learners_ensemble[0] for client in self.clients],
@@ -394,14 +498,7 @@ class APFLAggregator(Aggregator):
 
     def update_clients(self):
         for client in self.clients:
-
-            copy_model(
-                client.learners_ensemble[0].model, self.global_learners_ensemble[0].model)
-
-            if callable(getattr(client.learners_ensemble[0].optimizer, "set_initial_params", None)):
-                client.learners_ensemble[0].optimizer.set_initial_params(
-                    self.global_learners_ensemble[0].model.parameters()
-                )
+            copy_model(client.learners_ensemble[0].model, self.global_learners_ensemble[0].model)
 
 
 class LoopLessLocalSGDAggregator(PersonalizedAggregator):
@@ -419,6 +516,7 @@ class LoopLessLocalSGDAggregator(PersonalizedAggregator):
             log_freq,
             global_train_logger,
             global_test_logger,
+            single_batch_flag,
             communication_probability=0.2,
             penalty_parameter=0.1,
             sampling_rate=1.,
@@ -433,6 +531,7 @@ class LoopLessLocalSGDAggregator(PersonalizedAggregator):
             log_freq=log_freq,
             global_train_logger=global_train_logger,
             global_test_logger=global_test_logger,
+            single_batch_flag=single_batch_flag,
             sampling_rate=sampling_rate,
             sample_with_replacement=sample_with_replacement,
             test_clients=test_clients,
@@ -496,6 +595,7 @@ class ClusteredAggregator(Aggregator):
             log_freq,
             global_train_logger,
             global_test_logger,
+            local_test_logger,
             single_batch_flag,
             sampling_rate=1.,
             sample_with_replacement=False,
@@ -512,6 +612,7 @@ class ClusteredAggregator(Aggregator):
             log_freq=log_freq,
             global_train_logger=global_train_logger,
             global_test_logger=global_test_logger,
+            local_test_logger=local_test_logger,
             sampling_rate=sampling_rate,
             sample_with_replacement=sample_with_replacement,
             single_batch_flag=single_batch_flag,
@@ -530,7 +631,8 @@ class ClusteredAggregator(Aggregator):
         self.global_learners = [self.global_learners_ensemble]
         self.clusters_indices = [np.arange(len(clients)).astype("int")]
         self.n_clusters = 1
-        self.write_logs()
+ 
+        super().write_logs()
 
     def mix(self):
         clients_updates = np.zeros(
@@ -608,8 +710,14 @@ class ClusteredAggregator(Aggregator):
                         source=cluster_learners[learner_id].model
                     )
 
-    def update_test_clients(self):
-        pass
+
+    def write_logs(self):
+            ## 记录 本地训练精度 本地测试精度 平均值
+        self._write_logs(self.global_train_logger, self.clients, "Train")
+        self._write_logs(self.local_test_logger, self.clients, "Local_Test")
+
+        if self.verbose > 0:
+            print("#" * 80)
 
 
 class GroupAPFL(Aggregator):
@@ -621,6 +729,7 @@ class GroupAPFL(Aggregator):
             log_freq,
             global_train_logger,
             global_test_logger,
+            local_test_logger,
             single_batch_flag,
             communication_probability=1.,
             sampling_rate=1.,
@@ -636,6 +745,7 @@ class GroupAPFL(Aggregator):
             log_freq=log_freq,
             global_train_logger=global_train_logger,
             global_test_logger=global_test_logger,
+            local_test_logger=local_test_logger,
             sampling_rate=sampling_rate,
             single_batch_flag=single_batch_flag,
             sample_with_replacement=sample_with_replacement,
@@ -925,240 +1035,6 @@ class GroupAPFL(Aggregator):
 
             client.update_sample_weights()
             # client.update_learners_weights()
-
-class FuzzyGroupAggregator(Aggregator):
-
-    def __init__(
-            self,
-            clients,
-            global_learners_ensemble,
-            log_freq,
-            global_train_logger,
-            global_test_logger,
-            communication_probability,
-            single_batch_flag,
-            fuzzy_m=1.5,
-            pre_rounds=0,
-            sampling_rate=1.,
-            sample_with_replacement=False,
-            test_clients=None,
-            verbose=0,
-            seed=None
-    ):
-        super(FuzzyGroupAggregator, self).__init__(
-            clients=clients,
-            global_learners_ensemble=global_learners_ensemble,
-            log_freq=log_freq,
-            global_train_logger=global_train_logger,
-            global_test_logger=global_test_logger,
-            communication_probability=communication_probability,
-            single_batch_flag=single_batch_flag,
-            sampling_rate=sampling_rate,
-            sample_with_replacement=sample_with_replacement,
-            test_clients=test_clients,
-            verbose=verbose,
-            seed=seed
-        )
-
-        self.single_batch_flag=single_batch_flag    
-        self.fuzzy_m=fuzzy_m
-        self.global_learner=self.global_learners_ensemble[0]
-        self.membership_mat= None
-        self.n_clusters=1
-
-        self.pre_rounds=pre_rounds
-
-    def init_membership_mat(self,n_clients,n_clusters):
-        membership_mat = torch.rand(n_clients, n_clusters)
-        # 对每行进行归一化，使得每行的元素和为1
-        membership_mat = membership_mat / \
-            membership_mat.sum(dim=1, keepdim=True)
-        
-        print("init membership_mat:", membership_mat[2:5])
-        return membership_mat  
-    
-    def pre_train(self):
-
-        for client_id, client in enumerate(self.clients):
-            # print("client_id ", client_id)
-
-            client.step(self.single_batch_flag)
-
-        clients_learners = [client.learners_ensemble[0] for client in self.clients]
-        average_learners(clients_learners, self.global_learners_ensemble[0], weights=self.clients_weights)
-
-        self.update_clients()
-
-    @calc_exec_time(calc_time=calc_time)
-    def pre_clusting(self, n_clusters):
-
-        # from sklearn.decomposition import PCA
-        # from sklearn.cluster import KMeans
-
-        print(f"\n============start clustring==============")
-
-        # print((self.n_clients, self.model_dim) )
-
-        clients_updates = np.zeros((self.n_clients, self.model_dim))
-
-        for client_id, client in enumerate(self.clients):
-            clients_updates[client_id] = client.step(self.single_batch_flag)  
-        
-        # print(clients_updates[2:5]) 
-        # print("lin1004 ",get_param_tensor(self.clients[0].learners_ensemble[0].model)[10:15])
-
-        # pca = PCA(n_components=0.98)  
-        # reduced_clients_updates = pca.fit_transform(clients_updates)
-        # for client_id, client in enumerate(self.clients):
-        #     clients_updates[client_id] = client.step(self.single_batch_flag)
-
-        self.n_clusters = n_clusters
-        print("clients_updates size",clients_updates.shape)
-        similarities = pairwise_distances(clients_updates, metric="cosine")
-        print("similarities size",similarities.shape)
-
-        clustering = AgglomerativeClustering(
-            n_clusters=self.n_clusters, metric="precomputed", linkage="complete")
-        clustering.fit(similarities)
-        
-        # kmeans = KMeans(n_clusters=n_clusters, n_init=2, init='k-means++',max_iter=100)
-        # kmeans.fit(clients_updates)
-        # cluster_labels = kmeans.labels_
-        self.clusters_indices = [np.argwhere(clustering.labels_ == i).flatten() for i in range(self.n_clusters)]
-        # print("clusters_indices ",self.clusters_indices)
-
-        print(f"=============cluster completed===============")
-
-        print("\ndivided into {} clusters:".format(self.n_clusters))
-        for i, cluster in enumerate(self.clusters_indices):
-            print(f"cluster {i}: {cluster}")
-
-        cluster_weights= torch.zeros(self.n_clusters)
-        
-        learners = [deepcopy(self.clients[0].learners_ensemble[0])
-                     for _ in range(self.n_clusters)]
-        for learner in learners:
-            # init_nn(learner.model)
-            learner.device=self.device
-            
-        self.cluster_learners= LearnersEnsemble(learners=learners, learners_weights=cluster_weights)
-
-        for cluster_id, indices in enumerate(self.clusters_indices):
-            cluster_weights[cluster_id]= self.clients_weights[indices].sum()
-
-            cluster_clients = [self.clients[i] for i in indices]
-
-            average_learners(
-                learners=[client.learners_ensemble[0] for client in cluster_clients],
-                target_learner=self.cluster_learners[cluster_id],
-                weights=self.clients_weights[indices] /
-                cluster_weights[cluster_id]
-            )
-            print("cluster_params ",cluster_id,"  ", get_param_tensor(self.cluster_learners[cluster_id].model)[10:15])
-            
-        self.membership_mat=self.init_membership_mat(self.n_clients,self.n_clusters)
-        self.membership_mat = self.membership_mat.to(self.device)
-
-        # print("init membership_mat ",self.membership_mat[2:5])
-        
-    def train(self):
-
-        cluster_models = [learner.model for learner in self.cluster_learners]
-
-        client_learners= [client.learners_ensemble[0] for client in self.clients]
-        
-        client_models = [learner.model for learner in client_learners]
-        
-        with segment_timing("updating all clients' model"):
-            for client_id, client in enumerate(self.clients):
-                client.step(self.single_batch_flag)
-
-                # print("client_id ", client_id)
-                # all_losses= self.cluster_learners.gather_losses(client.val_iterator)
-                # print("all_losses size",all_losses.size())
-                # print("all_losses",all_losses)
-                # client.update_membership_loss(
-                #         membership_mat= self.membership_mat,
-                #         losses=all_losses,
-                #         client_id=client_id
-                #         )
-            print(self.membership_mat[2:5])
-                
-        # print("lin1075 ",get_param_tensor(self.clients[0].learners_ensemble[0].model)[10:15])
-
-        with segment_timing("updating all clients' membership matrices "):
-            cluster_params = get_param_list(cluster_models)
-            # print(cluster_params.size())
-            for client_id, client in enumerate(self.clients):
-                client_params = get_param_tensor(client.learners_ensemble[0].model)
-                # print("client_params",client_params[10:20])
-                client.update_membership_mat(
-                    client_params=client_params,
-                    cluster_params=cluster_params,
-                    membership_mat= self.membership_mat,
-                    fuzzy_m=self.fuzzy_m,
-                    client_id=client_id
-                    )
-
-                
-        with segment_timing("aggregate to get the cluster model"):
-            fuzzy_average_cluster_model(
-                client_models=client_models,
-                cluster_models=cluster_models,
-                membership_mat= self.membership_mat,
-                fuzzy_m=self.fuzzy_m,
-                clients_weights=self.clients_weights
-                )
-                
-            print("afert:", self.membership_mat[2:5])
-            
-        with segment_timing("aggregate to get the client model"):
-
-            fuzzy_average_client_model(
-                membership_mat= self.membership_mat,
-                cluster_models=cluster_models,
-                client_models=client_models
-                )
-            
-        with segment_timing("aggregate to get the global model"):
-            average_learners(
-                learners=client_learners,
-                target_learner=self.global_learners_ensemble[0],
-                weights=self.clients_weights
-                )
-            
-        # for client_id, client in enumerate(self.clients):
-        #         # client_params = get_param_tensor(client.learners_ensemble[0].model)
-        #         client.step(self.single_batch_flag)
-        # self.update_clients()
-
-       
-
-    def mix(self):
-
-        if self.c_round<self.pre_rounds:
-            print(f"\n=========pretrain at {self.c_round} round===========")
-            self.pre_train()
-
-        elif self.c_round==self.pre_rounds and self.n_clusters==1:
-            self.pre_clusting(n_clusters=3)
-            self.c_round -= 1
-            
-        else: 
-            print(f"\n=========train at {self.c_round} round===========")
-            self.train()
-
-        self.c_round += 1    
-        if self.c_round % self.log_freq == 0   or self.c_round==199:
-            self.write_logs()
-        if self.c_round % 20==0 or self.c_round==199:
-            print(self.membership_mat)
-
-    def update_clients(self):
-        for client in self.clients:
-            for learner in client.learners_ensemble:
-                copy_model(target=learner.model,
-                           source=self.global_learners_ensemble[0].model)
 
 
 class AgnosticAggregator(CentralizedAggregator):
