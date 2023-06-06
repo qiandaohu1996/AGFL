@@ -73,9 +73,8 @@ class FuzzyGroupAggregator(Aggregator):
     
     def pre_train(self):
 
-        for client_id, client in enumerate(self.clients):
+        for client in self.clients:
             # print("client_id ", client_id)
-
             client.step(self.single_batch_flag)
 
         clients_learners = [client.learners_ensemble[0] for client in self.clients]
@@ -89,7 +88,7 @@ class FuzzyGroupAggregator(Aggregator):
         print(f"\n============start clustring==============")
         clients_updates = np.zeros((self.n_clients, self.model_dim))
         for client_id, client in enumerate(self.clients):
-            clients_updates[client_id] = client.step(self.single_batch_flag)  
+            clients_updates[client_id] = client.step_record_update(self.single_batch_flag)  
         
         self.n_clusters = n_clusters
         print("clients_updates size",clients_updates.shape)
@@ -97,7 +96,7 @@ class FuzzyGroupAggregator(Aggregator):
         print("similarities size",similarities.shape)
 
         clustering = AgglomerativeClustering(
-            n_clusters=self.n_clusters, metric="precomputed", linkage="complete")
+                        n_clusters=self.n_clusters, metric="precomputed", linkage="complete")
         clustering.fit(similarities)
         
         self.clusters_indices = [np.argwhere(clustering.labels_ == i).flatten() for i in range(self.n_clusters)]
@@ -114,7 +113,6 @@ class FuzzyGroupAggregator(Aggregator):
         learners = [deepcopy(self.clients[0].learners_ensemble[0])
                      for _ in range(self.n_clusters)]
         for learner in learners:
-            # init_nn(learner.model)
             learner.device=self.device
             
         self.cluster_learners= LearnersEnsemble(learners=learners, learners_weights=cluster_weights)
@@ -132,24 +130,24 @@ class FuzzyGroupAggregator(Aggregator):
             )
             print("cluster_params ",cluster_id,"  ", get_param_tensor(self.cluster_learners[cluster_id].model)[10:15])
             
-        self.membership_mat=self.init_membership_mat(self.n_clients,self.n_clusters+1)
+        self.membership_mat=self.init_membership_mat(self.n_clients,self.n_clusters)
         self.membership_mat = self.membership_mat.to(self.device)
 
         # print("init membership_mat ",self.membership_mat[2:5])
         
     def train(self):
-        self.cluster_comm_clients_indices=list(range(self.n_clients))
-        self.global_comm_clients_indices=[]
+        # self.cluster_comm_clients_indices=list(range(self.n_clients))
+        # self.global_comm_clients_indices=[]
 
-        self.cluster_comm_clients_weights=self.clients_weights
-        self.cluster_comm_clients_membership_mat=torch.empty((),device=self.device)
+        # self.cluster_comm_clients_weights=self.clients_weights
+        # self.cluster_comm_clients_membership_mat=torch.empty((),device=self.device)
         cluster_models = [learner.model for learner in self.cluster_learners]
 
         client_learners= [client.learners_ensemble[0] for client in self.clients ]
-        cluster_comm_clients_learners = [self.clients[i].learners_ensemble[0] for i in self.cluster_comm_clients_indices]
+        # cluster_comm_clients_learners = [self.clients[i].learners_ensemble[0] for i in self.cluster_comm_clients_indices]
 
         client_models = [learner.model for learner in client_learners]
-        cluster_comm_client_models = [learner.model for learner in cluster_comm_clients_learners]
+        # cluster_comm_client_models = [learner.model for learner in cluster_comm_clients_learners]
 
         with segment_timing("updating all clients' model"):
             for client_id, client in enumerate(self.clients):
@@ -158,54 +156,54 @@ class FuzzyGroupAggregator(Aggregator):
 
         with segment_timing("updating all clients' membership matrices "):
         
-            if self.c_round % 5 == 0 :
-                cluster_models.append(self.global_learners_ensemble[0].model)
-                cluster_params = get_param_list(cluster_models)
+            # if self.c_round % 5 == 0 :
+            #     cluster_models.append(self.global_learners_ensemble[0].model)
+            #     cluster_params = get_param_list(cluster_models)
 
-                for client_id, client in enumerate(self.clients):
-                    client_params = get_param_tensor(client.learners_ensemble[0].model)
-                    comm_global_flag=client.update_global_membership_mat(
-                        client_params=client_params,
-                        cluster_params=cluster_params,
-                        membership_mat= self.membership_mat,
-                        global_fixed_m=True,
-                        fuzzy_m=self.fuzzy_m,
-                        client_id=client_id
-                        )
+            #     for client_id, client in enumerate(self.clients):
+            #         client_params = get_param_tensor(client.learners_ensemble[0].model)
+            #         comm_global_flag=client.update_global_membership_mat(
+            #             client_params=client_params,
+            #             cluster_params=cluster_params,
+            #             membership_mat= self.membership_mat,
+            #             global_fixed_m=True,
+            #             fuzzy_m=self.fuzzy_m,
+            #             client_id=client_id
+            #             )
                     
-                if comm_global_flag:
-                    self.cluster_comm_clients_indices.remove(client_id)
-                    self.global_comm_clients_indices.append(client_id)
+            #     if comm_global_flag:
+            #         self.cluster_comm_clients_indices.remove(client_id)
+            #         self.global_comm_clients_indices.append(client_id)
 
-                print("cluster_comm_clients length",len(self.cluster_comm_clients_indices))
-                print("global_comm_clients length",len(self.global_comm_clients_indices))
-                self.update_cluster_comm_client_weights()
+            #     print("cluster_comm_clients length",len(self.cluster_comm_clients_indices))
+            #     print("global_comm_clients length",len(self.global_comm_clients_indices))
+            #     self.update_cluster_comm_client_weights()
              
-                self.cluster_comm_clients_membership_mat= self.membership_mat[self.cluster_comm_clients_indices, :]
+            #     self.cluster_comm_clients_membership_mat= self.membership_mat[self.cluster_comm_clients_indices, :]
                 
-            else:
-                cluster_params = get_param_list(cluster_models)
-                # self.cluster_comm_clients=self.clients[:]
-                # print(cluster_params.size())
-                self.cluster_comm_clients=[self.clients[i] for i in self.cluster_comm_clients_indices]
-                for client_id, client in enumerate(self.cluster_comm_clients):
-                    client_params = get_param_tensor(client.learners_ensemble[0].model)
-                    client.update_membership_mat(
-                        client_params=client_params,
-                        cluster_params=cluster_params,
-                        membership_mat= self.cluster_comm_clients_membership_mat,
-                        global_fixed_m=True,
-                        fuzzy_m=self.fuzzy_m,
-                        client_id=client_id
-                        )
+            # else:
+            cluster_params = get_param_list(cluster_models)
+            # self.cluster_comm_clients=self.clients[:]
+            # print(cluster_params.size())
+            # self.cluster_comm_clients=[self.clients[i] for i in self.cluster_comm_clients_indices]
+            for client_id, client in enumerate(self.clients):
+                client_params = get_param_tensor(client.learners_ensemble[0].model)
+                client.update_membership_mat(
+                    client_params=client_params,
+                    cluster_params=cluster_params,
+                    membership_mat= self.membership_mat,
+                    global_fixed_m=True,
+                    fuzzy_m=self.fuzzy_m,
+                    client_id=client_id
+                    )
 
         with segment_timing("aggregate to get the cluster model "):
             fuzzy_average_cluster_model(
-                client_models=cluster_comm_client_models,
+                client_models=client_models,
                 cluster_models=cluster_models,
-                membership_mat= self.cluster_comm_clients_membership_mat,
+                membership_mat= self.membership_mat,
                 fuzzy_m=self.fuzzy_m,
-                clients_weights=self.cluster_comm_clients_weights
+                clients_weights=self.clients_weights
                 )
                 
             print("after:", self.membership_mat[2:5])
@@ -213,9 +211,9 @@ class FuzzyGroupAggregator(Aggregator):
         with segment_timing("aggregate to get the client model "):
 
             fuzzy_average_client_model(
-                membership_mat= self.cluster_comm_clients_membership_mat,
+                membership_mat= self.membership_mat,
                 cluster_models=cluster_models,
-                client_models=cluster_comm_client_models
+                client_models=client_models
                 )
 
         with segment_timing("aggregate to get the global model "):
@@ -224,15 +222,16 @@ class FuzzyGroupAggregator(Aggregator):
                 target_learner=self.global_learners_ensemble[0],
                 weights=self.clients_weights
                 )
-            self.global_comm_clients=[self.clients[i] for i in self.global_comm_clients_indices]
-            self.update_clients(self.global_comm_clients)
+            # self.global_comm_clients=[self.clients[i] for i in self.global_comm_clients_indices]
+            self.update_clients(self.clients)
             
     def mix(self):
 
         
         if self.c_round<self.pre_rounds:
             self.pre_train()
-
+            if self.c_round % self.log_freq == 0   or self.c_round==199:
+                self.write_logs()
         elif self.c_round==self.pre_rounds and self.n_clusters==1:
             self.pre_clusting(n_clusters=3)
             self.c_round -= 1
@@ -240,8 +239,8 @@ class FuzzyGroupAggregator(Aggregator):
         else: 
             self.train()
 
-        if self.c_round % self.log_freq == 0   or self.c_round==199:
-            self.write_logs()
+            if self.c_round % self.log_freq == 0   or self.c_round==199:
+                self.write_logs()
         if self.c_round % 30==0 or self.c_round==199:
             print(self.membership_mat)
         self.c_round += 1   

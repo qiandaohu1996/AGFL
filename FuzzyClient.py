@@ -62,14 +62,15 @@ class FuzzyClient(Client):
             print("distances after min",distances)
 
             # membership_mat[client_id]=F.softmax(distances,dim=0).T
-
+            dens=[]
             for cluster_id in range(n_clusters):
                 den = 0.0
                 for j in range(n_clusters):
                     den += (distances[cluster_id] / distances[j])  ** p
                     if den>1.e+6: den=1.e+6
-                print("den ", den)
+                dens.append(den)
                 membership_mat[client_id, cluster_id] = 1.0 / den
+            print("dens", dens)
             print("membership_mat client ",client_id,"  ", membership_mat[client_id])    
             torch.cuda.empty_cache()
 
@@ -93,7 +94,6 @@ class FuzzyClient(Client):
                 distances[i]= torch.norm(diff) 
 
             print("distances",distances)
-                # if(distances.min()<0 ): 
             distances =distances-0.5*distances.min()
             print("distances after min",distances)
 
@@ -108,7 +108,6 @@ class FuzzyClient(Client):
                 membership_mat[client_id, cluster_id] = 1.0 / den
             if membership_mat[client_id,-1] > 0.95: 
                 comm_global_flag=True
-  
 
             for cluster_id in range(n_clusters-1):
                 den = 0.0

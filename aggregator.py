@@ -186,7 +186,7 @@ class Aggregator(ABC):
                 if self.verbose > 0:
                     print(f"{log_type} Loss: {avg_loss:.3f} | {log_type} Acc: {avg_acc * 100:.3f}%")
 
-
+    @calc_exec_time(calc_time=True)
     def write_logs(self):
         self.update_test_clients()
 
@@ -276,7 +276,9 @@ class NoCommunicationAggregator(Aggregator):
         self.sample_clients()
 
         for client in self.sampled_clients:
-            client.step()
+            for _ in range(client.local_steps):
+
+                client.step(self.single_bacth_flag)
 
         self.c_round += 1
 
@@ -298,7 +300,8 @@ class CentralizedAggregator(Aggregator):
 
         for client_id,client in enumerate( self.sampled_clients):
             # print("client_id ", client_id)
-            client.step(self.single_bacth_flag)
+            for _ in range(client.local_steps):
+                client.step(self.single_bacth_flag)
         if self.c_round % self.log_freq == 0:
             self.write_local_test_logs()
 
@@ -387,13 +390,14 @@ class APFLAggregator(Aggregator):
         self.sample_clients()
 
         for client in self.sampled_clients:
+            for _ in range(client.local_steps):
             
-            client.step(self.single_batch_flag)
-            client_learner=client.learners_ensemble
+                client.step(self.single_batch_flag)
+                client_learner=client.learners_ensemble
 
-            if client_learner.adaptive_alpha:
-                client_learner.update_alpha() 
-                apfl_partial_average(client_learner[0], client_learner[1], client_learner.alpha)
+                if client_learner.adaptive_alpha:
+                    client_learner.update_alpha() 
+                    apfl_partial_average(client_learner[0], client_learner[1], client_learner.alpha)
 
         if self.c_round % 5 ==0:
             average_learners(
@@ -462,7 +466,68 @@ class AGFLAggregator(Aggregator):
             seed=seed
         )
         # assert self.n_learners == 2, "APFL requires two learners"
+    
+    def pre_train(self):
 
+        for client in self.clients:
+            client.learners_ensemble[0].fit_batches()
+
+        clients_learners = [client.learners_ensemble[0] for client in self.clients]
+        average_learners(clients_learners, self.global_learners_ensemble[0], weights=self.clients_weights)
+
+        self.update_clients(self.clients)
+
+    @calc_exec_time(calc_time=calc_time)
+    def pre_clusting(self, n_clusters):
+        print(f"\n============start clustring==============")
+        clients_updates = np.zeros((self.n_clients, self.model_dim))
+        for client_id, client in enumerate(self.clients):
+            clients_updates[client_id] =  client.step_record_update(self.single_bacth_flag)
+        
+        self.n_clusters = n_clusters
+        # print("clients_updates size",clients_updates.shape)
+        similarities = pairwise_distances(clients_updates, metric="cosine")
+        # print("similarities size",similarities.shape)
+
+        clustering = AgglomerativeClustering(
+            n_clusters=self.n_clusters, metric="precomputed", linkage="complete")
+        clustering.fit(similarities)
+        
+        self.clusters_indices = [np.argwhere(clustering.labels_ == i).flatten() for i in range(self.n_clusters)]
+        # print("clusters_indices ",self.clusters_indices)
+
+        print(f"=============cluster completed===============")
+
+        print("\ndivided into {} clusters:".format(self.n_clusters))
+        for i, cluster in enumerate(self.clusters_indices):
+            print(f"cluster {i}: {cluster}")
+
+        cluster_weights= torch.zeros(self.n_clusters)
+        
+        learners = [deepcopy(self.clients[0].learners_ensemble[0])
+                     for _ in range(self.n_clusters)]
+        for learner in learners:
+            # init_nn(learner.model)
+            learner.device=self.device
+            
+        # self.cluster_learners= LearnersEnsemble(learners=learners, learners_weights=cluster_weights)
+
+        for cluster_id, indices in enumerate(self.clusters_indices):
+            cluster_weights[cluster_id]= self.clients_weights[indices].sum()
+
+            cluster_clients = [self.clients[i] for i in indices]
+
+            average_learners(
+                learners=[client.learners_ensemble[0] for client in cluster_clients],
+                target_learner=self.global_learners_ensemble[cluster_id+1],
+                weights=self.clients_weights[indices] /
+                cluster_weights[cluster_id]
+            )
+
+
+
+            # print("cluster_params ",cluster_id,"  ", get_param_tensor(self.cluster_learners[cluster_id].model)[10:15])
+ 
     def mix(self):
         self.sample_clients()
         
@@ -473,7 +538,6 @@ class AGFLAggregator(Aggregator):
         
 
         for client in self.sampled_clients:
-            for _ in range(client.local_steps):
                 client.step(self.single_batch_flag)
 
                 partial_average(
@@ -496,9 +560,12 @@ class AGFLAggregator(Aggregator):
         if self.c_round % self.log_freq == 0:
             self.write_logs()
 
+   
+
     def update_clients(self):
         for client in self.clients:
-            copy_model(client.learners_ensemble[0].model, self.global_learners_ensemble[0].model)
+            for learner_id,learner in  enumerate(client.learners_ensemble):
+                copy_model(learner.model, self.global_learners_ensemble[learner_id].model)
 
 
 class LoopLessLocalSGDAggregator(PersonalizedAggregator):
@@ -577,7 +644,8 @@ class LoopLessLocalSGDAggregator(PersonalizedAggregator):
         else:
             self.sample_clients()
             for client in self.sampled_clients:
-                client.step(single_batch_flag=True)
+                for _ in range(client.local_steps):
+                    client.step(single_batch_flag=True)
 
 
 class ClusteredAggregator(Aggregator):
@@ -639,7 +707,7 @@ class ClusteredAggregator(Aggregator):
             (self.n_clients, self.n_learners, self.model_dim))
 
         for client_id, client in enumerate(self.clients):
-            clients_updates[client_id] = client.step()
+            clients_updates[client_id] = client.step_record_update(self.single_bacth_flag)
 
         similarities = np.zeros(
             (self.n_learners, self.n_clients, self.n_clients))
@@ -779,11 +847,8 @@ class GroupAPFL(Aggregator):
 
     def pre_train(self):
 
-        clients_updates = np.zeros((self.n_clients, self.model_dim))
-        for client_id, client in enumerate(self.clients):
-            # print("client_id ", client_id)
-            clients_updates[client_id] = client.pre_step(
-                self.single_batch_flag)
+        for client in self.clients:
+            client.step(self.single_batch_flag)
 
         clients_learners = [self.clients[client_id].learners_ensemble[0]
                             for client_id in range(self.n_clients)]
@@ -798,7 +863,7 @@ class GroupAPFL(Aggregator):
 
         clients_updates = np.zeros((self.n_clients, self.model_dim))
         for client_id, client in enumerate(self.clients):
-            clients_updates[client_id] = client.pre_step(
+            clients_updates[client_id] = client.step_record_update(
                 self.single_batch_flag)
 
         self.n_clusters = n_clusters
@@ -1078,8 +1143,9 @@ class AgnosticAggregator(CentralizedAggregator):
 
         clients_losses= []
         for client in self.sampled_clients:
-            client_losses= client.step()
-            clients_losses.append(client_losses)
+            for _ in range(client.local_steps):
+                client_losses= client.step(self.single_bacth_flag)
+                clients_losses.append(client_losses)
 
         clients_losses= torch.tensor(clients_losses)
 
@@ -1154,6 +1220,7 @@ class FFLAggregator(CentralizedAggregator):
 
         hs= 0
         for client in self.sampled_clients:
+
             hs += client.step(lr=self.lr)
 
         # take account for the lr used inside optimizer
@@ -1219,7 +1286,9 @@ class DecentralizedAggregator(Aggregator):
     def mix(self):
         # update local models
         for client in self.clients:
-            client.step()
+            for _ in range(client.local_steps):
+
+                client.step(self.single_bacth_flag)
 
         # mix models
         mixing_matrix= torch.tensor(

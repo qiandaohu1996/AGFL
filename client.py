@@ -91,9 +91,11 @@ class Client(object):
         try:
             batch = next(self.train_loader)
         except StopIteration:
+            # print(f"StopIteration in get_next_batch")
             self.train_loader = iter(self.train_iterator)
             batch = next(self.train_loader)
-        except:
+        except Exception as e:
+            print(f"Exception in get_next_batch: {e}")
             batch = None
         return batch
 
@@ -110,19 +112,57 @@ class Client(object):
         self.update_learners_weights()
 
         if single_batch_flag:
-            batch = self.get_next_batch()
+            for _ in range(self.local_steps):
+                batch = self.get_next_batch()
 
-            client_updates = \
+                # client_updates = \
                 self.learners_ensemble.fit_batch(
                     batch=batch,
                     weights=self.samples_weights
                 )
         else:
+            # client_updates = \
+            self.learners_ensemble.fit_epochs(
+                iterator=self.train_iterator,
+                n_epochs=self.local_steps,
+                weights=self.samples_weights
+            )
+
+        # TODO: add flag arguments to use `free_gradients`
+        # self.learners_ensemble.free_gradients()
+
+        # return client_updates
+    
+    def step_record_update(self, single_batch_flag=True, *args, **kwargs):
+        """
+        perform on step for the client
+
+        :param single_batch_flag: if true, the client only uses one batch to perform the update
+        :return
+            clients_updates: ()
+        """
+        self.counter += 1
+        self.update_sample_weights()
+        self.update_learners_weights()
+        # print("samples_weights size",self.samples_weights.size())
+        if single_batch_flag:
+            batches = []
+            for _ in range(self.local_steps):
+                batch = self.get_next_batch()
+                batches.append(batch)
+
             client_updates = \
-                self.learners_ensemble.fit_epochs(
+                self.learners_ensemble[0].fit_batches_record_update(
+                batches=batches,
+                weights=self.samples_weights[0] * self.n_learners
+            )
+
+        else:
+            client_updates = \
+                self.learners_ensemble[0].fit_epochs_record_update(
                     iterator=self.train_iterator,
                     n_epochs=self.local_steps,
-                    weights=self.samples_weights
+                    weights=self.samples_weights[0]*self.n_learners
                 )
 
         # TODO: add flag arguments to use `free_gradients`
@@ -231,37 +271,6 @@ class AGFL2Client(Client):
         )
         self.counter = 0
 
-    def pre_step(self, single_batch_flag=False, *args, **kwargs):
-        """
-        perform on step for the client
-
-        :param single_batch_flag: if true, the client only uses one batch to perform the update
-        :return
-            clients_updates: ()
-        """
-        self.counter += 1
-        self.update_sample_weights()
-        # self.update_learners_weights()
-
-        if single_batch_flag:
-            batch = self.get_next_batch()
-            client_updates = \
-                self.learners_ensemble[0].pre_fit_batch(
-                    batch=batch,
-                    weights=self.samples_weights[0]*2
-                )
-        else:
-            client_updates = \
-                self.learners_ensemble[0].fit_epochs(
-                    iterator=self.train_iterator,
-                    n_epochs=self.local_steps,
-                    weights=self.samples_weights[0]*2
-                )
-
-        # TODO: add flag arguments to use `free_gradients`
-        # self.learners_ensemble.free_gradients()
-
-        return client_updates
 
     def svrg_step(self, client_weight, *args, **kwargs):
 
@@ -575,7 +584,7 @@ class FedRepClient(Client):
 class MixtureClient(Client):
     def update_sample_weights(self):
         all_losses = self.learners_ensemble.gather_losses(self.val_iterator)
-        print("all_losses",all_losses[:,:5]) 
+        # print("all_losses",all_losses[:,:5]) 
         # [3,49]
         # print("all_losses ",self.learners_ensemble.learners_weights)
         print("learners_weights ",self.learners_ensemble.learners_weights)
@@ -585,8 +594,8 @@ class MixtureClient(Client):
         
         self.samples_weights = F.softmax(
             (torch.log(self.learners_ensemble.learners_weights) - all_losses.T), dim=1).T
-        print("samples_weights",self.samples_weights.size())
-        # print("samples_weights",self.learners_ensemble.learners_weights)
+        print("samples_weights size",self.samples_weights.size())
+        print("samples_weights",self.learners_ensemble.learners_weights)
         torch.cuda.empty_cache()
 
     def update_learners_weights(self):

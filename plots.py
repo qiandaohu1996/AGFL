@@ -151,6 +151,6 @@ def make_plot(path_, tag_, save_path):
 
 if __name__ == "__main__":
  
-    path = "D:/AGFL-main/logs/emnist_pathologic_cl20/lr0.1"
+    path = "D:/AGFL-main/logs/femnist/lr0.1"
     for tag in TAGS:
         make_plot(path_=path, tag_=tag, save_path='./figures/114/')
