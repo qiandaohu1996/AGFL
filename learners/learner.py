@@ -99,12 +99,17 @@ class Learner:
         # print("sample number ", y.size() )
         if self.is_binary_classification:
             y = y.type(torch.float32).unsqueeze(1)
+        # print("weights size", weights.size())
+        # print("weights[indices] size", (weights[indices]).size())
 
         self.optimizer.zero_grad()
         y_pred = self.model(x)
         loss_vec = self.criterion(y_pred, y)
         if weights is not None:
             weights = weights.to(self.device)
+            # print("loss_vec size", loss_vec.size())
+            # print("weights size", weights.size())
+            # print("weights[indices] size", (weights[indices]).size())
             loss = (loss_vec * weights[indices]).sum() / loss_vec.size(0)
         else:
             loss = loss_vec.mean()
@@ -136,34 +141,45 @@ class Learner:
 
         # return loss, metric.detach()
     
-    def pre_fit_batch(self, batch, weights=None):
+
+    def fit_batch_record_update(self, batch, weights=None):
 
         client_updates = torch.zeros(self.model_dim)
         old_params = self.get_param_tensor()
-        # print(old_params[150:155])
-        # self.model.train()
-
-        self.compute_gradients_and_loss(batch, weights)
-        torch.nn.utils.clip_grad_norm_(self.model.parameters(), 100.)
-        self.optimizer_step()
-
+        self.fit_batch(batch, weights)
         params = self.get_param_tensor()
-        client_updates = (params - old_params)
-        # print(params[150:155])
-        # print(client_updates[150:155])
+        client_updates = (params - old_params)  
 
-        return client_updates
+        return client_updates.cpu().numpy()
+
+    def fit_batches(self, batches, weights=None):
+        for batch in batches:
+            self.fit_batch(batch, weights)
+
+    def fit_batches_record_update(self, batches, weights=None):
+        client_updates = torch.zeros(self.model_dim,device=self.device)
+        old_params = self.get_param_tensor()
+
+        for batch in batches:
+            self.fit_batch(batch, weights)
+            params = self.get_param_tensor()
+            client_updates += (params - old_params)
+
+        return client_updates.cpu().numpy()
+
     
+
+
     # @memory_profiler
     def fit_epoch(self, iterator, weights=None):
-        client_updates = torch.zeros(self.model_dim)
-        old_params = self.get_param_tensor()
+        # client_updates = torch.zeros(self.model_dim)
+        # old_params = self.get_param_tensor()
         # print("old_params" ,old_params[150:155])
 
         self.model.train()
 
-        global_loss = 0.
-        global_metric = 0.
+        # global_loss = 0.
+        # global_metric = 0.
         n_samples = 0
 
         for x, y, indices in iterator:
@@ -193,41 +209,40 @@ class Learner:
             # 输出梯度范数的值
             # print(f"Gradient Norm:{gradient_norm.item():.3f}",)
             torch.nn.utils.clip_grad_norm_(self.model.parameters(), 100.)
-            gradient_norm = torch.norm(torch.cat([param.grad.flatten() for param in self.model.parameters()]))
+            # gradient_norm = torch.norm(torch.cat([param.grad.flatten() for param in self.model.parameters()]))
 
             # 输出梯度范数的值
             # print(f"Gradient Norm:{gradient_norm.item():.3f}",)
             
             self.optimizer_step()
-            params = self.get_param_tensor()
-            client_updates = (params - old_params)
+            # params = self.get_param_tensor()
+            # client_updates = (params - old_params)
             # print(params[150:155])
             # print(client_updates[150:155])
 
-            global_loss += loss.detach() * loss_vec.size(0)
-            global_metric += self.metric(y_pred, y).detach()
-            # print("loss ", global_loss / n_samples)
+        #     global_loss += loss.detach() * loss_vec.size(0)
+        #     global_metric += self.metric(y_pred, y).detach()
+        #     # print("loss ", global_loss / n_samples)
             
-        return global_loss / n_samples, global_metric / n_samples
+        # return global_loss / n_samples, global_metric / n_samples
     
     def fit_epochs(self, iterator, n_epochs, weights=None):
- 
+        for _ in range(n_epochs):
+            self.fit_epoch(iterator, weights)
+    
+    def fit_epoches_record_update(self, iterator, n_epochs, weights=None):
         client_updates = torch.zeros(self.model_dim)
         old_params = self.get_param_tensor()
-        # print("old_params ",old_params[150:155])
 
-        for step in range(n_epochs):
-            # print("n_epoch ",step)
-            self.fit_epoch(iterator, weights)
+        self.fit_epoches(iterator, n_epochs, weights)
 
         params = self.get_param_tensor()
 
         client_updates = (params - old_params)  
-        # print("params ",params[150:155])
-        # print("client_updates ",client_updates[150:155])
 
         return client_updates.cpu().numpy()
     
+
     def saga_fit_epoch(self, iterator, weights=None):
 
         self.model.train()

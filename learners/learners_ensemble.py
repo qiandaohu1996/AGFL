@@ -75,8 +75,16 @@ class LearnersEnsemble(object):
             losses.append(loss)
 
         return losses
-    
+
     def fit_batch(self, batch, weights):
+
+        for learner_id, learner in enumerate(self.learners):
+            if weights is not None:
+                learner.fit_batch(batch=batch, weights=weights[learner_id])
+            else:
+                learner.fit_batch(batch=batch, weights=None)
+
+    def fit_batch_record_update(self, batch, weights):
 
         client_updates = torch.zeros(len(self.learners), self.model_dim)
 
@@ -90,7 +98,31 @@ class LearnersEnsemble(object):
             client_updates[learner_id] = (params - old_params)
 
         return client_updates.cpu().numpy()
- 
+    
+    def fit_batches(self, batch, n_batches, weights):
+
+        for learner_id, learner in enumerate(self.learners):
+            if weights is not None:
+                learner.fit_batches(batch, n_batches, weights=weights[learner_id])
+            else:
+                learner.fit_batches(batch, n_batches, weights=None)
+
+    def fit_batches_record_update(self, batch, n_batches, weights):
+
+        client_updates = torch.zeros(len(self.learners), self.model_dim)
+
+        for learner_id, learner in enumerate(self.learners):
+            old_params = learner.get_param_tensor()
+            if weights is not None:
+                learner.fit_batches(batch, n_batches, weights=weights[learner_id])
+            else:
+                learner.fit_batches(batch, n_batches, weights=None)
+            params = learner.get_param_tensor()
+
+            client_updates[learner_id] = (params - old_params)
+
+        return client_updates.cpu().numpy()
+    
     def fit_epoch(self, iterator, weights=None):
  
         for learner_id, learner in enumerate(self.learners):
@@ -100,6 +132,15 @@ class LearnersEnsemble(object):
                 learner.fit_epoch(iterator, weights=None)
 
     def fit_epochs(self, iterator, n_epochs, weights=None):
+ 
+        for learner_id, learner in enumerate(self.learners):
+            if weights is not None:
+                learner.fit_epochs(iterator, n_epochs, weights=weights[learner_id])
+            else:
+                learner.fit_epochs(iterator, n_epochs, weights=None)
+
+
+    def fit_epochs_record_update(self, iterator, n_epochs, weights=None):
         """
         perform multiple training epochs, updating each learner in the ensemble
 
@@ -250,7 +291,7 @@ class AGFLLearnersEnsemble(LearnersEnsemble):
         
         # softmax normalization
         self.alpha = torch.exp(self.alpha) / torch.sum(torch.exp(self.alpha))  
-        self.alpha = torch.clamp(self.alpha, 0.01, 0.99)
+        self.alpha = torch.clamp(self.alpha, 0.0001, 0.0999)
         
     def fit_batch(self, batch, weights):
 
