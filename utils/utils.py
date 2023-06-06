@@ -8,7 +8,6 @@ from learners.learner import *
 from learners.learners_ensemble import *
 from client import *
 from aggregator import *
-
 from .optim import *
 from .metrics import *
 from .constants import *
@@ -24,7 +23,7 @@ from tqdm import tqdm
 EMINST_LOADER_LIST=["emnist", "emnist20", "emnist_component4","emnist_pathologic","emnist_pathologic_cl10","emnist_pathologic_cl20"]
 EMINST_LERANER_LIST=EMINST_LOADER_LIST + ["femnist"]
 
-CIFAR100_LIST= ["cifar100","cifar100_s1"]
+CIFAR100_LIST= ["cifar100","cifar100_s0.25"]
 
 def get_data_dir(experiment_name):
     """

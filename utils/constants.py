@@ -31,6 +31,7 @@ LOADER_TYPE = [
     "synthetic",
     "cifar10",
     "cifar100",
+    "cifar100_s0.25",
     "emnist",
     "emnist_pathologic",
     "emnist_pathologic_cl10",

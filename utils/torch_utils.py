@@ -106,11 +106,11 @@ def fuzzy_average_cluster_model(
 
                 for client_id, model in enumerate(client_models):
                     state_dict = model.state_dict(keep_vars=True)
-                    print("membership_mat ",(membership_mat))
+                    # print("membership_mat ",(membership_mat))
 
                     # print("membership_mat len",(membership_mat[client_id]))
 
-                    print("clients_weights ", clients_weights)
+                    # print("clients_weights ", clients_weights)
                     membership_val = (membership_mat[client_id][cluster_id] * clients_weights[client_id]) ** fuzzy_m 
                     if average_params:
                         target_state_dict[key].data += ( membership_val * state_dict[key].data.clone())
