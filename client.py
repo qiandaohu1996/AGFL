@@ -50,6 +50,7 @@ class Client(object):
     def __init__(
             self,
             learners_ensemble,
+            idx,
             train_iterator,
             val_iterator,
             test_iterator,
@@ -83,7 +84,7 @@ class Client(object):
             self.n_learners, self.n_train_samples) / self.n_learners
 
         self.local_steps = local_steps
-
+        self.idx=idx
         self.counter = 0
         self.logger = logger
 
@@ -127,6 +128,10 @@ class Client(object):
                 n_epochs=self.local_steps,
                 weights=self.samples_weights
             )
+        for learner in self.learners_ensemble:
+            if learner.lr_scheduler:
+                learner.lr_scheduler.step()
+ 
 
         # TODO: add flag arguments to use `free_gradients`
         # self.learners_ensemble.free_gradients()
@@ -452,77 +457,6 @@ class AGFLClient(Client):
         
  
 
-    def pre_write_logs(self, dataset_type):
-        if self.tune_locally:
-            self.update_tuned_learners()
-            learner = self.tuned_learners_ensemble[0]
-        else:
-            learner = self.learners_ensemble[0]
-
-        if dataset_type == "train":
-            iterator = self.val_iterator
-            loss_key = "Train/Loss"
-            metric_key = "Train/Metric"
-        elif dataset_type == "test":
-            iterator = self.test_iterator
-            loss_key = "Test/Loss"
-            metric_key = "Test/Metric"
-
-        loss, acc = learner.evaluate_iterator(iterator)
-
-        self.logger.add_scalar(loss_key, loss, self.counter)
-        self.logger.add_scalar(metric_key, acc, self.counter)
-
-        return loss, acc
-
-    def write_train_logs(self):
-        if self.tune_locally:
-            self.update_tuned_learners()
-
-            learner1 = self.tuned_learners_ensemble[0]
-            learner2 = self.tuned_learners_ensemble[1]
-        else:
-            learner1 = self.learners_ensemble[0]
-            learner2 = self.learners_ensemble[1]
-
-        train_loss, train_acc = learner1.evaluate_iterator(self.val_iterator)
-        train_loss2, train_acc2 = learner2.evaluate_iterator(self.val_iterator)
-
-        metrics = [
-            ("Train/Loss", train_loss),
-            ("Train/Metric", train_acc),
-            ("Global_Train/Loss", train_loss2),
-            ("Global_Train/Metric", train_acc2),
-        ]
-
-        for metric_name, metric_value in metrics:
-            self.logger.add_scalar(metric_name, metric_value, self.counter)
-
-        return train_loss, train_acc, train_loss2, train_acc2
-
-    def write_test_logs(self):
-        if self.tune_locally:
-            self.update_tuned_learners()
-
-        if self.tune_locally:
-            learner = self.tuned_learners_ensemble[0]
-        else:
-            learner = self.learners_ensemble[0]
-
-        test_loss, test_acc = learner.evaluate_iterator(self.test_iterator)
-
-        metrics = [
-            ("Global_Test/Loss", test_loss),
-            ("Global_Test/Metric", test_acc)
-        ]
-
-        for metric_name, metric_value in metrics:
-            self.logger.add_scalar(metric_name, metric_value, self.counter)
-
-        return test_loss, test_acc
-
-
-
 class FedRepClient(Client):
     """
     Client used to implement
@@ -586,22 +520,22 @@ class MixtureClient(Client):
         all_losses = self.learners_ensemble.gather_losses(self.val_iterator)
         # print("all_losses",all_losses[:,:5]) 
         # [3,49]
-        # print("all_losses ",self.learners_ensemble.learners_weights)
-        print("learners_weights ",self.learners_ensemble.learners_weights)
+        # print("all_losses ",all_losses.size())
+        # print("learners_weights ",self.learners_ensemble.learners_weights)
         # [3]
-        print("samples_weights size",self.samples_weights.size())
+        # print("samples_weights size",self.samples_weights.size())
         # [3,49]
         
         self.samples_weights = F.softmax(
             (torch.log(self.learners_ensemble.learners_weights) - all_losses.T), dim=1).T
-        print("samples_weights size",self.samples_weights.size())
-        print("samples_weights",self.learners_ensemble.learners_weights)
+        # print("samples_weights size",self.samples_weights.size())
+        # print("samples_weights",self.learners_ensemble.learners_weights)
         torch.cuda.empty_cache()
 
     def update_learners_weights(self):
         self.learners_ensemble.learners_weights = self.samples_weights.mean(
             dim=1)
-        print("learners_weights",self.learners_ensemble.learners_weights)
+        # print("learners_weights",self.learners_ensemble.learners_weights)
         torch.cuda.empty_cache()
 
 

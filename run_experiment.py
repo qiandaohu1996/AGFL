@@ -17,95 +17,6 @@ import time
 
 from torch.utils.tensorboard import SummaryWriter
 
-
-def init_clients1(args_, root_path, logs_root):
-    # ...
-    print("===> Building data iterators..")
-
-    train_iterators, val_iterators, test_iterators =\
-        get_loaders(
-            type_=get_loader_type(args_.experiment),
-            root_path=root_path,
-            batch_size=args_.bz,
-            is_validation=args_.validation
-        )
-    print("===> Initializing clients..")
-    clients_ = []   
-    for task_id, (train_iterator, test_iterator) in \
-            enumerate(zip(train_iterators, test_iterators), start=1):
-        if train_iterator is None or test_iterator is None:
-            continue
-            
-        client = init_single_client(args_, train_iterator, test_iterator, task_id, logs_root)
-        clients_.append(client)
-    
-    return clients_
-@memory_profiler
-# os.environ["CUDA_LAUNCH_BLOCKING"] = "1"
-def init_clients(args_, root_path, logs_root):
-    """
-    initialize clients from data folders
-    :param args_:
-    :param root_path: path to directory containing data folders
-    :param logs_root: path to logs root
-    :return: List[Client]
-    """
-    print("===> Building data iterators..")
-
-    train_iterators, val_iterators, test_iterators =\
-        get_loaders(
-            type_=get_loader_type(args_.experiment),
-            root_path=root_path,
-            batch_size=args_.bz,
-            is_validation=args_.validation
-        )
-
-    print("===> Initializing clients..")
-    clients_ = []
-    for task_id, (train_iterator, val_iterator, test_iterator) in \
-            enumerate(tqdm(zip(train_iterators, val_iterators, test_iterators), total=len(train_iterators))):
-        # print("task_id ",task_id)
-        if train_iterator is None or test_iterator is None:
-            continue
-            
-        learners_ensemble =\
-            get_learners_ensemble(
-                n_learners=args_.n_learners,
-                name=args_.experiment,
-                method=args_.method,
-                adaptive_alpha=args_.adaptive_alpha,
-                alpha=args_.alpha,
-                device=args_.device,
-                optimizer_name=args_.optimizer,
-                scheduler_name=args_.lr_scheduler,
-                initial_lr=args_.lr,
-                input_dim=args_.input_dimension,
-                output_dim=args_.output_dimension,
-                n_rounds=args_.n_rounds,
-                seed=args_.seed,
-                mu=args_.mu,
-            )
-
-        logs_path = os.path.join(logs_root, "task_{}".format(task_id))
-        os.makedirs(logs_path, exist_ok=True)
-        logger = SummaryWriter(logs_path)
-
-        client = get_client(
-            client_type=CLIENT_TYPE[args_.method],
-            learners_ensemble=learners_ensemble,
-            q=args_.q,
-            fuzzy_m=args_.fuzzy_m,
-            train_iterator=train_iterator,
-            val_iterator=val_iterator,
-            test_iterator=test_iterator,
-            logger=logger,
-            local_steps=args_.local_steps,
-            tune_locally=args_.locally_tune_clients
-        )
-
-        clients_.append(client)
-    return clients_
-
 def run_experiment(args_):
     torch.manual_seed(args_.seed)
 
@@ -124,6 +35,7 @@ def run_experiment(args_):
             root_path=os.path.join(data_dir, "train"),
             logs_root=os.path.join(logs_root, "train")
         )
+    print("Clients number ", len(clients))
 
     print("==> Test Clients initialization..")
     with segment_timing("init test clients"):
@@ -133,12 +45,11 @@ def run_experiment(args_):
             root_path=os.path.join(data_dir, "test"),
             logs_root=os.path.join(logs_root, "test")
         )
-
+    print("test_clients number ", len(test_clients))
 
     logs_path = os.path.join(logs_root, "train", "global")
     os.makedirs(logs_path, exist_ok=True)
     global_train_logger = SummaryWriter(logs_path)
-
 
     logs_path = os.path.join(logs_root, "test", "global")
     os.makedirs(logs_path, exist_ok=True)
@@ -186,8 +97,10 @@ def run_experiment(args_):
                 q=args_.q,
                 mu=args_.mu,
                 fuzzy_m=args_.fuzzy_m,
-                communication_probability=args_.comm_prob,
+                fuzzy_m_momentum=args_.fuzzy_m_momentum,
+                comm_prob=args_.comm_prob,
                 sampling_rate=args_.sampling_rate,
+                n_clusters=args_.n_clusters,
                 pre_rounds=args_.pre_rounds,
                 log_freq=args_.log_freq,
                 global_train_logger=global_train_logger,
@@ -229,13 +142,10 @@ def run_experiment(args_):
 
 if __name__ == "__main__":
     PYTORCH_CUDA_ALLOC_CONF='max_split_size_mb:512'
-    torch.backends.cudnn.deterministic = True
-    torch.backends.cudnn.benchmark = False
-
-    # 获取当前命令行命令
+    torch.backends.cudnn.benchmark = True   # 启用快速卷积算法
+    torch.backends.cudnn.deterministic = True  # 使用确定性卷积算法
+    # torch.backends.cudnn.enabled = False
     command = ' '.join(sys.argv)
-
-    # 打印当前命令行命令
     print("command line: ", command)
 
     start_time=time.time()
