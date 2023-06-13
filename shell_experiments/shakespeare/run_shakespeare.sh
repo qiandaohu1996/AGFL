@@ -1,36 +1,48 @@
-cd ../../
+source D:/AGFL-main/shell_experiments/run.sh
 
-# run FedAvg
-echo "Run FedAvg"
-python run_experiment.py shakespeare FedAvg --n_learners 1 --n_rounds 200 --bz 128 --lr 0.01 \
- --lr_scheduler multi_step --log_freq 5 --device cuda --optimizer sgd --seed 1234 --verbose 1
 
-# run FedAvg + local adaption
-echo "Run FedAvg + local adaption"
-python run_experiment.py shakespeare FedAvg --n_learners 1 --locally_tune_clients  --n_rounds 200 --bz 128 \
- --lr 0.01 --lr_scheduler multi_step --log_freq 5 --device cuda --optimizer sgd --seed 1234 --verbose 1
+# DATA=("emnist" emnist_compon4ent "femnist" "cifar10" "cifar100")
+# DATA=("shakespeare" )
+dataset="shakespeare"
+ 
+algo="FedAvg"
 
-# run training using local data only
-echo "Run Local"
-python run_experiment.py shakespeare local --n_learners 1 --n_rounds 200 --bz 128 --lr 0.01 \
- --lr_scheduler multi_step --log_freq 5 --device cuda --optimizer sgd --seed 1234 --verbose 1
+run $dataset  
 
-# run Clustered FL
-echo "Run Clustered FL"
-python run_experiment.py shakespeare clustered --n_learners 1 --n_rounds 200 --bz 128 --lr 0.01 \
- --lr_scheduler multi_step --log_freq 5 --device cuda --optimizer sgd --seed 1234 --verbose 1
+run $dataset  --locally_tune_clients  
 
-# run FedProx
-echo "Run FedProx"
-python run_experiment.py shakespeare FedProx --n_learners 1 --n_rounds 200 --bz 128 --lr 0.01 --mu 0.1 \
- --lr_scheduler multi_step --log_freq 5 --device cuda --optimizer prox_sgd --seed 1234 --verbose 1
+algo="local"
 
-# Run Richtarek's Formulation
-echo "Run Personalized (Richtarek's Formulation)"
-python run_experiment.py shakespeare personalized --n_learners 1 --n_rounds 200 --bz 128 --lr 0.01 --mu 1.0 \
- --lr_scheduler multi_step --log_freq 5 --device cuda --optimizer prox_sgd --seed 1234 --verbose 1
+run $dataset  
 
-# run FedEM
-echo "Run FedEM"
-python run_experiment.py shakespeare FedEM --n_learners 3 --n_rounds 200 --bz 128 --lr 0.05 \
- --lr_scheduler multi_step --log_freq 5 --device cuda --optimizer sgd --seed 1234 --verbose 1
+algo="clustered"
+
+run $dataset   
+
+algo="APFL"
+
+run $dataset  --alpha 0.5  --adaptive_alpha
+
+
+algo="FedProx"
+  
+run $dataset   --mu '0.1'
+
+algo="pFedMe"
+
+run $dataset   --mu '0.1'
+
+inner_dir="_mu_0.5"
+
+algo="FedProx"
+
+run $dataset   --mu '0.5'
+ 
+algo="pFedMe"
+
+run $dataset   --mu '0.5'
+
+
+algo="FedEM"
+
+run $dataset  --sampling_rate '0.5'

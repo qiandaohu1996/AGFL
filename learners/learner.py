@@ -54,6 +54,7 @@ class Learner:
             device,
             optimizer,
             lr_scheduler=None,
+            fuzzy_m_scheduler=None,
             is_binary_classification=False
     ):
 
@@ -63,6 +64,7 @@ class Learner:
         self.device = device
         self.optimizer = optimizer
         self.lr_scheduler = lr_scheduler
+        self.fuzzy_m_scheduler = fuzzy_m_scheduler
         self.is_binary_classification = is_binary_classification
 
         self.model_dim = int(self.get_param_tensor().shape[0])
@@ -130,7 +132,7 @@ class Learner:
         torch.nn.utils.clip_grad_norm_(self.model.parameters(), 100.)
         # gradient_norm = torch.norm(torch.cat([param.grad.flatten() for param in self.model.parameters()]))
         # print(f"after Gradient Norm: {gradient_norm.item():.3f}",)
-        self.optimizer_step()
+        self.optimizer.step()
 
         # x, y, _ = batch
         # x = x.to(self.device).type(torch.float32)
@@ -155,6 +157,7 @@ class Learner:
     def fit_batches(self, batches, weights=None):
         for batch in batches:
             self.fit_batch(batch, weights)
+      
 
     def fit_batches_record_update(self, batches, weights=None):
         client_updates = torch.zeros(self.model_dim,device=self.device)
@@ -214,7 +217,7 @@ class Learner:
             # 输出梯度范数的值
             # print(f"Gradient Norm:{gradient_norm.item():.3f}",)
             
-            self.optimizer_step()
+            self.optimizer.step()
             # params = self.get_param_tensor()
             # client_updates = (params - old_params)
             # print(params[150:155])
@@ -229,7 +232,7 @@ class Learner:
     def fit_epochs(self, iterator, n_epochs, weights=None):
         for _ in range(n_epochs):
             self.fit_epoch(iterator, weights)
-    
+
     def fit_epoches_record_update(self, iterator, n_epochs, weights=None):
         client_updates = torch.zeros(self.model_dim)
         old_params = self.get_param_tensor()
@@ -276,7 +279,7 @@ class Learner:
             # client_grad=self.model.grad
             torch.nn.utils.clip_grad_norm_(self.model.parameters(), 100.)
 
-            self.optimizer_step()
+            self.optimizer.step()
             params = self.get_param_tensor()
 
             client_updates = (params - old_params)
@@ -420,7 +423,7 @@ class LanguageModelingLearner(Learner):
 
             loss.backward()
 
-            self.optimizer_step()
+            self.optimizer.step()
 
             global_loss += loss.detach() * loss_vec.size(0) / chunk_len
             global_metric += self.metric(y_pred, y).detach() / chunk_len

@@ -22,7 +22,7 @@ class FuzzyCluster():
         membership_mat = membership_mat / \
             membership_mat.sum(dim=1, keepdim=True)
         
-        print("init membership_mat:", membership_mat[2:5])
+        print("init membership_mat: ", membership_mat[2:5])
         return membership_mat
     
     # @calc_exec_time(calc_time=True)

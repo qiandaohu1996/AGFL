@@ -1,5 +1,8 @@
-cd ../../
+#!/usr/bin/env bash
+# shellcheck disable=SC2034
+# shellcheck disable=SC1091
 
+source D:/AGFL-main/shell_experiments/run.sh
 
 echo "Run Personalized (Richtarek's Formulation), mu=0.01"
 python run_experiment.py cifar10 personalized --n_learners 1 --n_rounds 200 --bz 128 --lr 0.01 --mu 0.01 \

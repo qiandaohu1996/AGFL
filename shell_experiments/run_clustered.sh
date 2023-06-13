@@ -1,14 +1,19 @@
-source D:/AGFL-main/shell_experiments/run.sh
+#!/usr/bin/env bash
+# shellcheck disable=SC2034
+# shellcheck disable=SC1091
 
-DATA=("emnist" "emnist_compon4ent" "femnist" "cifar10" "cifar100")
-# DATA=("emnist" )
+source D:/AGFL-main/shell_experiments/run.sh
+# DATA=("emnist" "femnist" "cifar10" "cifar100")
+# DATA=("emnist")
+
+# DATA=("emnist" "emnist_compon4ent" "femnist" "cifar10" "cifar100")
+DATA=("cifar10" )
 # dataset="shakespeare"
 
-algo="clustered"
+sampling_rates=("0.2")
 
-for dataset in "${DATA[@]}"
-    do
-        run_batch $dataset 
-    done
+DATA=("cifar10")
 
+run_clustered
 
+ 

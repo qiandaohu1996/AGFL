@@ -62,10 +62,23 @@ def parse_args(args_list=None):
         default=0.2
     )
     parser.add_argument(
+        '--trans',
+        help='The translation factor for the distance between the client\'s local model and the cluster model, using in FuzzyFL, default is 0.5min',
+        type=float,
+        default=0.5
+    )
+
+    parser.add_argument(
         '--fuzzy_m',
-        help=' default is 2.0',
+        help='fuzzy coefficients, using in fuzyyFL, default is 2.0',
         type=float,
         default=2.
+    )
+    parser.add_argument(
+        '--fuzzy_m_scheduler',
+        help='fuzzy coefficient scheduler, using in fuzyyFL, default is "constant"',
+        type=str,
+        default="constant"
     )
     parser.add_argument(
         '--adaptive_alpha',
@@ -98,14 +111,27 @@ def parse_args(args_list=None):
     )
     parser.add_argument(
         '--n_rounds',
-        help='number of communication rounds; default is 1',
+        help='number of communication rounds; default is 200',
         type=int,
         default=200
+    )
+
+    parser.add_argument(
+        '--n_clusters',
+        help='number of clusters to be used with `FuzzyFL`; ignored if method is not `FuzzyFL`; default is 3',
+        type=int,
+        default=3
     )
     parser.add_argument(
         '--minibatch',
         help='if selected,  choose minibatch gradient descent',
         action='store_true'
+    )
+    parser.add_argument(
+        '--fuzzy_m_momentum',
+        help='momentum when updating membership matrix in FuzzyFL; default is 0.8',
+        type=float,
+        default=0.8
     )
     parser.add_argument(
         '--bz',
@@ -127,7 +153,7 @@ def parse_args(args_list=None):
     )
     parser.add_argument(
         '--device',
-        help='device to use, either cpu or cuda; default is cpu',
+        help='device to use, either cpu or cuda; default is cuda',
         type=str,
         default="cuda"
     )
@@ -155,7 +181,7 @@ def parse_args(args_list=None):
              ' possible are "sqrt", "linear", "cosine_annealing", "multi_step" and "constant" (no learning rate decay);'
              'default is "constant"',
         type=str,
-        default="linear"
+        default="constant"
     )
     parser.add_argument(
         "--mu",

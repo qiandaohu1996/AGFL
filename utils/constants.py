@@ -14,15 +14,17 @@ ALL_MODELS = {
 
 DEFAULT_LOADER_TYPE = "tabular"
 DEFAULT_EXTENSION = ".pkl"
-
+SYNTHETIC_LIST=["synthetic", "synthetic00","synthetic01"]
 
 SPECIAL_EXTENSIONS = {
     "femnist": ".pt",
+    "femnist34": ".pt",
+    "femnist179": ".pt",
     "shakespeare": ".txt",
 }
 
 def get_loader_type(data_type):
-    return DEFAULT_LOADER_TYPE if data_type == "synthetic" else data_type
+    return DEFAULT_LOADER_TYPE if data_type in SYNTHETIC_LIST else data_type
  
 def get_extension(data_type):
     return SPECIAL_EXTENSIONS.get(data_type, DEFAULT_EXTENSION)
@@ -76,7 +78,7 @@ CLIENT_TYPE = {
     "AFL": "AFL",
     "FFL": "FFL",
     "APFL": "normal",
-    "AGFL": "AGFL",
+    "AGFL": "normal",
     "FuzzyFL": "FuzzyFL",
     "L2SGD": "normal",
     "FedAvg": "normal",

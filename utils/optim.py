@@ -339,7 +339,7 @@ def get_lr_scheduler(optimizer, scheduler_name, n_rounds=None):
         return optim.lr_scheduler.LambdaLR(optimizer, lr_lambda=lambda x: 1)
 
     elif scheduler_name == "cosine_annealing":
-        return optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=200, eta_min=0)
+        return optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=n_rounds, eta_min=0)
 
     elif scheduler_name == "multi_step":
         assert n_rounds is not None, "Number of rounds is needed for \"multi_step\" scheduler!"

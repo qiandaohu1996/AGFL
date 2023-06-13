@@ -242,9 +242,22 @@ def apfl_partial_average(personal_learner, global_learner, alpha):
     for key in source_state_dict:
         if source_state_dict[key].data.dtype == torch.float32:
             target_state_dict[key].data = \
-                alpha *   target_state_dict[key].data + (1-alpha) * source_state_dict[key].data
+                alpha * target_state_dict[key].data + (1-alpha) * source_state_dict[key].data
             
+def agfl_partial_average(personal_learner, cluster_learners, alpha):
+
+    target_state_dict = personal_learner.model.state_dict() 
+    source_state_dicts = [learner.model.state_dict() for learner in cluster_learners]
+
+    for key in target_state_dict:
+        if target_state_dict[key].data.dtype == torch.float32:
+            target_state_dict[key].data.zero_()
+            for cluster_id, source_state_dict in enumerate(source_state_dicts):
+                target_state_dict[key].data += alpha[cluster_id+1] * source_state_dict[key].data
  
+            
+
+
 def differentiate_learner(target, reference_state_dict, coeff=1.):
     """
     set the gradient of the model to be the difference between `target` and `reference` multiplied by `coeff`

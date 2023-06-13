@@ -1,6 +1,7 @@
 import time
-from FuzzyAgg import FuzzyGroupAggregator
-from FuzzyClient import FuzzyClient
+from fuzzy_agg import FuzzyGroupAggregator
+from fuzzy_client import FuzzyClient
+from utils.fuzzy_utils import get_fuzzy_m_scheduler
 
 from utils.models import *
 from utils.datasets import *
@@ -20,10 +21,15 @@ from torch.utils.tensorboard import SummaryWriter
 from tqdm import tqdm
 
 
-EMINST_LOADER_LIST=["emnist", "emnist20", "emnist_component4","emnist_pathologic","emnist_pathologic_cl10","emnist_pathologic_cl20"]
-EMINST_LERANER_LIST=EMINST_LOADER_LIST + ["femnist"]
+EMINST_LOADER_LIST=["emnist", "emnist20","emnist50", "emnist_c5","emnist20_c4", "emnist50_c4", "emnist_pathologic","emnist_pathologic_cl10","emnist_pathologic_cl20"]
+FEMNIST_LIST=["femnist","femnist34","femnist179"]
 
-CIFAR100_LIST= ["cifar100","cifar100_s0.25"]
+EMINST_LERANER_LIST=EMINST_LOADER_LIST + FEMNIST_LIST
+
+
+SYNTHETIC_LIST=["synthetic", "synthetic00","synthetic01"]
+CIFAR10_LIST= ["cifar10","cifar10_s0.1","cifar10_s0.2","cifar10_s0.5","cifar10_s0.25"]
+CIFAR100_LIST= ["cifar100","cifar100_s0.1","cifar100_s0.25"]
 
 def get_data_dir(experiment_name):
     """
@@ -69,7 +75,7 @@ def get_learner(
 
     """
     torch.manual_seed(seed)
-    if name == "synthetic":
+    if name in SYNTHETIC_LIST:
         if output_dim == 2:
             criterion = nn.BCEWithLogitsLoss(reduction="none").to(device)
             metric = binary_accuracy
@@ -80,7 +86,7 @@ def get_learner(
             metric = accuracy
             model = LinearLayer(input_dim, output_dim).to(device)
             is_binary_classification = False
-    elif name == "cifar10":
+    elif name in CIFAR10_LIST:
         criterion = nn.CrossEntropyLoss(reduction="none").to(device)
         metric = accuracy
         model = get_mobilenet(n_classes=10).to(device)
@@ -114,6 +120,7 @@ def get_learner(
                 n_layers=SHAKESPEARE_CONFIG["n_layers"]
             ).to(device)
         is_binary_classification = False
+ 
 
     else:
         raise NotImplementedError
@@ -131,6 +138,7 @@ def get_learner(
             scheduler_name=scheduler_name,
             n_rounds=n_rounds
         )
+    
 
     if name == "shakespeare":
         return LanguageModelingLearner(
@@ -188,6 +196,7 @@ def get_learners_ensemble(
     :return: LearnersEnsemble
 
     """
+
     learners = [
         get_learner(
             name=name,
@@ -230,7 +239,7 @@ def get_loaders(type_, root_path, batch_size, is_validation):
         (List[torch.utils.DataLoader], List[torch.utils.DataLoader], List[torch.utils.DataLoader])
 
     """
-    if type_ == "cifar10":
+    if type_  in CIFAR10_LIST:
         inputs, targets = get_cifar10()
     elif type_ in CIFAR100_LIST:
         inputs, targets = get_cifar100()
@@ -302,14 +311,13 @@ def get_loader(type_, path, batch_size, train, inputs=None, targets=None):
     """
     if type_ == "tabular":
         dataset = TabularDataset(path)
-    elif type_ == "cifar10":
+    elif type_ in CIFAR10_LIST:
         dataset = SubCIFAR10(path, cifar10_data=inputs, cifar10_targets=targets)
     elif type_  in CIFAR100_LIST:
         dataset = SubCIFAR100(path, cifar100_data=inputs, cifar100_targets=targets)
     elif type_ in EMINST_LOADER_LIST:
         dataset = SubEMNIST(path, emnist_data=inputs, emnist_targets=targets)
-     
-    elif type_ == "femnist":
+    elif type_  in FEMNIST_LIST:
         dataset = SubFEMNIST(path) 
     elif type_ == "shakespeare":
         dataset = CharacterDataset(path, chunk_len=SHAKESPEARE_CONFIG["chunk_len"])
@@ -320,66 +328,89 @@ def get_loader(type_, path, batch_size, train, inputs=None, targets=None):
         return
 
     # drop last batch, because of BatchNorm layer used in mobilenet_v2
-    drop_last = ((type_ in CIFAR100_LIST) or (type_ == "cifar10")) and (len(dataset) > batch_size) and train
+    drop_last = ((type_ in CIFAR100_LIST) or (type_ in CIFAR10_LIST)) and (len(dataset) > batch_size) and train
 
     return DataLoader(dataset, batch_size=batch_size, shuffle=train, drop_last=drop_last)
 
 
-
-
-def init_single_client(args_, train_iterator, val_iterator,test_iterator, task_id, logs_root):
+@memory_profiler
+# os.environ["CUDA_LAUNCH_BLOCKING"] = "1"
+def init_clients(args_, root_path, logs_root):
     """
-    Initialize a single client
-    :param args_: command line arguments
-    :param train_iterator: iterator for training data
-    :param test_iterator: iterator for test data
-    :param task_id: identifier for the task/client
+    initialize clients from data folders
+    :param args_:
+    :param root_path: path to directory containing data folders
     :param logs_root: path to logs root
-    :return: initialized client
+    :return: List[Client]
     """
+    print("===> Building data iterators..")
 
-    learners_ensemble = get_learners_ensemble(
-        n_learners=args_.n_learners,
-        name=args_.experiment,
-        method=args_.method,
-        adaptive_alpha=args_.adaptive_alpha,
-        alpha=args_.alpha,
-        device=args_.device,
-        optimizer_name=args_.optimizer,
-        scheduler_name=args_.lr_scheduler,
-        initial_lr=args_.lr,
-        input_dim=args_.input_dimension,
-        output_dim=args_.output_dimension,
-        n_rounds=args_.n_rounds,
-        seed=args_.seed,
-        mu=args_.mu,
-    )
+    train_iterators, val_iterators, test_iterators =\
+        get_loaders(
+            type_=get_loader_type(args_.experiment),
+            root_path=root_path,
+            batch_size=args_.bz,
+            is_validation=args_.validation
+        )
 
-    logs_path = os.path.join(logs_root, "task_{}".format(task_id))
-    os.makedirs(logs_path, exist_ok=True)
-    logger = SummaryWriter(logs_path)
+    print("===> Initializing clients..")
+    clients_ = []
+    for task_id, (train_iterator, val_iterator, test_iterator) in \
+            enumerate(tqdm(zip(train_iterators, val_iterators, test_iterators), total=len(train_iterators))):
+        # print("task_id ",task_id)
+        if train_iterator is None or test_iterator is None:
+            continue
+        learners_ensemble =\
+            get_learners_ensemble(
+                n_learners=args_.n_learners,
+                name=args_.experiment,
+                method=args_.method,
+                adaptive_alpha=args_.adaptive_alpha,
+                alpha=args_.alpha,
+                device=args_.device,
+                optimizer_name=args_.optimizer,
+                scheduler_name=args_.lr_scheduler,
+                initial_lr=args_.lr,
+                input_dim=args_.input_dimension,
+                output_dim=args_.output_dimension,
+                n_rounds=args_.n_rounds,
+                seed=args_.seed,
+                mu=args_.mu,
+            )
+        logs_path = os.path.join(logs_root, "task_{}".format(task_id))
+        os.makedirs(logs_path, exist_ok=True)
+        logger = SummaryWriter(logs_path)
 
-    client = get_client(
-        client_type=CLIENT_TYPE[args_.method],
-        learners_ensemble=learners_ensemble,
-        q=args_.q,
-        fuzzy_m=args_.fuzzy_m,
-        train_iterator=train_iterator,
-        val_iterator=val_iterator,
-        test_iterator=test_iterator,
-        logger=logger,
-        local_steps=args_.local_steps,
-        tune_locally=args_.locally_tune_clients
-    )
+        client = get_client(
+            client_type=CLIENT_TYPE[args_.method],
+            learners_ensemble=learners_ensemble,
+            q=args_.q,
+            initial_fuzzy_m=args_.fuzzy_m,
+            fuzzy_m_scheduler_name = args_.fuzzy_m_scheduler,
+            n_rounds=args_.n_rounds,
+            trans=args_.trans,
+            idx=task_id,
+            train_iterator=train_iterator,
+            val_iterator=val_iterator,
+            test_iterator=test_iterator,
+            logger=logger,
+            local_steps=args_.local_steps,
+            tune_locally=args_.locally_tune_clients
+        )
 
-    return client
+        clients_.append(client)
+    return clients_
 
 
 def get_client(
         client_type,
         learners_ensemble,
         q,
-        fuzzy_m,
+        fuzzy_m_scheduler_name,
+        initial_fuzzy_m,
+        n_rounds,
+        trans,
+        idx,
         train_iterator,
         val_iterator,
         test_iterator,
@@ -402,12 +433,14 @@ def get_client(
     :return:
 
     """
+
     if client_type == "mixture":
         return MixtureClient(
             learners_ensemble=learners_ensemble,
             train_iterator=train_iterator,
             val_iterator=val_iterator,
             test_iterator=test_iterator,
+            idx=idx,
             logger=logger,
             local_steps=local_steps,
             tune_locally=tune_locally
@@ -428,6 +461,7 @@ def get_client(
             train_iterator=train_iterator,
             val_iterator=val_iterator,
             test_iterator=test_iterator,
+            idx=idx,
             logger=logger,
             local_steps=local_steps,
             tune_locally=tune_locally,
@@ -439,17 +473,29 @@ def get_client(
             train_iterator=train_iterator,
             val_iterator=val_iterator,
             test_iterator=test_iterator,
+            idx=idx,
             logger=logger,
             local_steps=local_steps,
             tune_locally=tune_locally,
         )
     elif client_type == "FuzzyFL":
+        min_fuzzy_m=initial_fuzzy_m-0.2
+        fuzzy_m_scheduler=get_fuzzy_m_scheduler(
+                initial_fuzzy_m=initial_fuzzy_m,  
+                scheduler_name=fuzzy_m_scheduler_name, 
+                min_fuzzy_m=min_fuzzy_m,
+                n_rounds=n_rounds,
+                )
+
         return FuzzyClient(
             learners_ensemble=learners_ensemble,
             train_iterator=train_iterator,
             val_iterator=val_iterator,
             test_iterator=test_iterator,
-            fuzzy_m=fuzzy_m,
+            idx=idx,
+            initial_fuzzy_m=initial_fuzzy_m,
+            fuzzy_m_scheduler=fuzzy_m_scheduler,
+            trans=trans,
             logger=logger,
             local_steps=local_steps,
             tune_locally=tune_locally,
@@ -460,6 +506,7 @@ def get_client(
             train_iterator=train_iterator,
             val_iterator=val_iterator,
             test_iterator=test_iterator,
+            idx=idx,
             logger=logger,
             local_steps=local_steps,
             tune_locally=tune_locally
@@ -473,11 +520,13 @@ def get_aggregator(
         lr,
         lr_lambda,
         mu,
-        communication_probability,
+        comm_prob,
         q,
         sampling_rate,
         log_freq,
         fuzzy_m,
+        fuzzy_m_momentum,
+        n_clusters,
         global_train_logger,
         global_test_logger,
         local_test_logger,
@@ -496,7 +545,7 @@ def get_aggregator(
     :param lr: oly used with FLL aggregator
     :param lr_lambda: only used with Agnostic aggregator
     :param mu: penalization term, only used with L2SGD
-    :param communication_probability: communication probability, only used with L2SGD
+    :param comm_prob: communication probability, only used with L2SGD
     :param q: fairness hyper-parameter, ony used for FFL client
     :param sampling_rate:
     :param log_freq:
@@ -574,9 +623,10 @@ def get_aggregator(
             log_freq=log_freq,
             global_train_logger=global_train_logger,
             global_test_logger=global_test_logger,
+            local_test_logger=local_test_logger,
             single_batch_flag=single_batch_flag,
             test_clients=test_clients,
-            communication_probability=communication_probability,
+            comm_prob=comm_prob,
             penalty_parameter=mu,
             sampling_rate=sampling_rate,
             verbose=verbose,
@@ -591,6 +641,7 @@ def get_aggregator(
             lr_lambda=lr_lambda,
             global_train_logger=global_train_logger,
             global_test_logger=global_test_logger,
+            local_test_logger=local_test_logger,
             single_batch_flag=single_batch_flag,
             sampling_rate=sampling_rate,
             verbose=verbose,
@@ -606,6 +657,7 @@ def get_aggregator(
             q=q,
             global_train_logger=global_train_logger,
             global_test_logger=global_test_logger,
+            local_test_logger=local_test_logger,
             single_batch_flag=single_batch_flag,
             sampling_rate=sampling_rate,
             verbose=verbose,
@@ -623,6 +675,7 @@ def get_aggregator(
             test_clients=test_clients,
             global_train_logger=global_train_logger,
             global_test_logger=global_test_logger,
+            local_test_logger=local_test_logger,
             sampling_rate=sampling_rate,
             single_batch_flag=single_batch_flag,
             verbose=verbose,
@@ -638,7 +691,7 @@ def get_aggregator(
             global_train_logger=global_train_logger,
             global_test_logger=global_test_logger,
             local_test_logger=local_test_logger,
-            communication_probability=communication_probability,
+            comm_prob=comm_prob,
             sampling_rate=sampling_rate,
             single_batch_flag=single_batch_flag,
             verbose=verbose,
@@ -653,7 +706,7 @@ def get_aggregator(
             test_clients=test_clients,
             global_train_logger=global_train_logger,
             global_test_logger=global_test_logger,
-            communication_probability=communication_probability,
+            comm_prob=comm_prob,
             local_test_logger=local_test_logger,
             sampling_rate=sampling_rate,
             single_batch_flag=single_batch_flag,
@@ -661,18 +714,21 @@ def get_aggregator(
             seed=seed
         )
     elif aggregator_type == "FuzzyFL":
+
+        
         return FuzzyGroupAggregator(
             clients=clients,
             global_learners_ensemble=global_learners_ensemble,
             log_freq=log_freq,
             test_clients=test_clients,
             pre_rounds=pre_rounds,
+            n_clusters=n_clusters,
+            fuzzy_m_momentum=fuzzy_m_momentum,
             global_train_logger=global_train_logger,
             global_test_logger=global_test_logger,
             local_test_logger=local_test_logger,
-            communication_probability=communication_probability,
+            comm_prob=comm_prob,
             sampling_rate=sampling_rate,
-            fuzzy_m=fuzzy_m,
             single_batch_flag=single_batch_flag,
             verbose=verbose,
             seed=seed

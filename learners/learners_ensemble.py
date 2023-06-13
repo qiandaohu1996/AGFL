@@ -272,7 +272,6 @@ class AGFLLearnersEnsemble(LearnersEnsemble):
         self.pre_model=None
         self.gd_model=None
 
-
     def update_alpha(self):
         # n_clusters = len(self.learners) - 1
         alpha_grad = torch.zeros(len(self.learners), device=self.device)

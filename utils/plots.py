@@ -7,30 +7,51 @@ TAGS = [
     "Train/Loss",
     "Train/Metric",
     "Test/Loss",
+    "Test/Metric",
+    "Local_Test/Metric",
+    "Local_Test/Loss"
+]
+TAGS = [
+    "Train/Loss",
+    "Train/Metric",
+    "Test/Loss",
     "Test/Metric"
 ]
-
 FILES_NAMES = {
     "Train/Loss": "train-loss.png",
     "Train/Metric": "train-acc.png",
     "Test/Loss": "test-loss.png",
-    "Test/Metric": "test-acc.png"}
+    "Test/Metric": "test-acc.png",
+    "Local_Test/Metric": "local-test-acc.png",
+    "Local_Test/Loss": "local-test-loss.png"}
 
 AXE_LABELS = {
     "Train/Loss": "Train loss",
     "Train/Metric": "Train acc",
     "Test/Loss": "Test loss",
-    "Test/Metric": "Test acc"
+    "Test/Metric": "Test acc",
+    "Local_Test/Metric": "Local_Test acc",
+    "Local_Test/Loss" : "Local_Test loss" 
 }
-
+# LEGEND = {
+#     "local": "Local",
+#     "clustered": "Clustered FL",
+#     "FedAvg_lr_0.1": "FedAvg",
+#     "FedEM": "FedEM (Ours)",
+#     "FedAvg_adapt": "FedAvg+",
+#     "personalized": "pFedMe",
+#     "FedProx": "FedProx",
+#     "FuzzyFL_lr_0.03": "FuzzyFL",
+# }
 LEGEND = {
-    "local": "Local",
-    "clustered": "Clustered FL",
     "FedAvg": "FedAvg",
-    "FedEM": "FedEM (Ours)",
-    "FedAvg_adapt": "FedAvg+",
-    "personalized": "pFedMe",
-    "FedProx": "FedProx"
+    # "FedEM": "FedEM",
+    "FuzzyFL": "FuzzyFL",
+    "FedProx": "FedProx",
+    "pFedMe": "pFedMe",
+    "clustered": "Clustered FL",
+    "APFL": "APFL",
+    "L2SGD": "L2SGD"
 }
 
 MARKERS = {
@@ -38,8 +59,11 @@ MARKERS = {
     "clustered": "s",
     "FedAvg": "h",
     "FedEM": "d",
+    "APFL": "q",
+    "AGFL": "p",
+    "FuzzyFL": "s",
     "FedAvg_adapt": "4",
-    "personalized": "X",
+    "pFedMe": "X",
     "DEM": "|",
     "FedProx": "p"
 }
@@ -50,35 +74,49 @@ COLORS = {
     "FedAvg": "tab:green",
     "FedEM": "tab:red",
     "FedAvg_adapt": "tab:purple",
-    "personalized": "tab:brown",
+    "pFedMe": "tab:brown",
     "DEM": "tab:pink",
-    "FedProx": "tab:cyan"
+    "APFL": "tab:pink",
+    "FedProx": "tab:cyan",
+    "FuzzyFL": "tab:red"
 }
 
-
+ 
 def make_plot(path_, tag_, save_path):
+
     """
     :param path_: path of the logs directory, `path_` should contain sub-directories corresponding to methods
         each sub-directory must contain a single tf events file.
     :param tag_: the tag to be plotted, possible are "Train/Loss", "Train/Metric", "Test/Loss", "Test/Metric"
     :param save_path: path to save the resulting plot
-
     """
+    print("tag",tag_)
     fig, ax = plt.subplots(figsize=(24, 20))
 
     for method in os.listdir(path_):
-        for mode in ["train"]:
+        print("\nmethod  ", method)
+        if tag_ in ["Train/Loss", "Train/Metric"]:
+            mode = "train"
+        elif tag_ in ["Test/Loss", "Test/Metric"]:
+            mode = "test"
+        else:
+            print(f"Invalid tag: {tag_}. Skipping...")
+            continue
+        method_path = os.path.join(path_, method, mode)
 
-            method_path = os.path.join(path_, method, mode)
-
-            for task in os.listdir(method_path):
-                if task == "global":
-                    task_path = os.path.join(method_path, task)
-                    ea = EventAccumulator(task_path).Reload()
-
+        print("method_path", method_path)
+        
+        # Check the correct tag depending on mode
+        for task in os.listdir(method_path):
+            if task == "global" :
+                task_path = os.path.join(method_path, task)
+                print("task_path  ",task_path)
+                ea = EventAccumulator(task_path).Reload()
+                # print("ea  " ,type(ea))
+                try:
                     tag_values = []
                     steps = []
-                    for event in ea.Scalars(tag_):
+                    for event in ea.Scalars(tag):
                         tag_values.append(event.value)
                         steps.append(event.step)
 
@@ -87,12 +125,15 @@ def make_plot(path_, tag_, save_path):
                             steps,
                             tag_values,
                             linewidth=5.0,
-                            marker=MARKERS[method],
+                            # marker=MARKERS[method],
                             markersize=20,
                             markeredgewidth=5,
                             label=f"{LEGEND[method]}",
                             color=COLORS[method]
                         )
+                except KeyError:
+                    print(f"Tag '{tag}' not found in {task_path}. Skipping...")
+                    continue
 
     ax.grid(True, linewidth=2)
 
@@ -105,3 +146,11 @@ def make_plot(path_, tag_, save_path):
     os.makedirs(save_path, exist_ok=True)
     fig_path = os.path.join(save_path, f"{FILES_NAMES[tag_]}")
     plt.savefig(fig_path, bbox_inches='tight')
+
+
+
+if __name__ == "__main__":
+ 
+    path = "D:/AGFL-main/logs/femnist/lr0.1"
+    for tag in TAGS:
+        make_plot(path_=path, tag_=tag, save_path='./figures/114/')

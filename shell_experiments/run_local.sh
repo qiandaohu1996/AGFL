@@ -10,8 +10,4 @@ sampling_rates=("0.2")
 
 DATA=("cifar10")
 
-comm_probs=("0.2")  
-mus=("0.1") 
-run_l2gd 
- 
-
+run_local
